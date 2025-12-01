@@ -1,0 +1,28 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.9.0",
+    "pybind11>=2.10",
+    "wheel>=0.44.0",
+    "cmake==3.27.0"
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "evi"
+version = "0.1.0"
+description = "Encrypted Vector Index library"
+requires-python = ">=3.9,<3.14"
+urls = { "Homepage" = "https://github.com/CryptoLabInc/evi" }
+
+[tool.scikit-build]
+cmake.minimum-version = "3.19"
+wheel.packages = ["build/pymodule"]
+wheel.install-dir = "evi"
+
+cmake.args = [
+  "-DBUILD_PYTHON=ON"
+]
+
+
+[project.scripts]
+evi-keygen = "evi.cli.keygen:main"

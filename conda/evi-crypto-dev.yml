@@ -1,0 +1,18 @@
+name: evi-crypto-dev
+channels:
+  - conda-forge
+dependencies:
+  - c-compiler=1.5.1
+  - cxx-compiler=1.5.1
+  - clang-tools=14
+  - clang=14
+  - clangxx=14
+  - llvm-openmp
+  - cmake=3.27
+  - doxygen
+  - graphviz
+  - pre-commit
+  - gperftools
+  - valgrind
+  - openssl=3.1.0
+  - pybind11

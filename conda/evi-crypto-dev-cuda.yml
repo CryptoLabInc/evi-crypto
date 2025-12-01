@@ -1,0 +1,22 @@
+name: evi-crypto-dev-cuda
+channels:
+  - nvidia/label/cuda-11.8.0
+  - conda-forge
+dependencies:
+  - cuda-minimal-build
+  - libcurand-dev
+  - c-compiler=1.5.1
+  - cxx-compiler=1.5.1
+  - clang-tools=14
+  - clang=14
+  - clangxx=14
+  - llvm-openmp
+  - cmake=3.27
+  - doxygen
+  - graphviz
+  - pre-commit
+  - gperftools
+  - nccl=2.19.4.1
+  - valgrind=3.22.0
+  - openssl=3.1.0
+  - pybind11

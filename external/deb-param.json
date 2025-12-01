@@ -1,0 +1,50 @@
+[
+  {
+    "_comment1": "This file contains preset parameters for the deb library.",
+    "_comment3": "The parameters are in JSON format, and the values from PARENT are inherited.",
+    "_comment2": "You can add your own presets here. (Need to recompile the library.)",
+    "_comment4": "Refer to the documentation for details on each field.",
+    "_comment6": "Optional values (Default): PARENT(Self), RANK(1), NUM_SECRET(1), GADGET_RANK(1)."
+  },
+  {
+    "NAME": "EVI_IP0",
+    "LOG_DEGREE": 12,
+    "NUM_BASE": 1,
+    "NUM_QP": 0,
+    "NUM_TP": 1,
+    "ENC_LEVEL": 0,
+    "HWT": 2730,
+    "PRIMES": [
+      2251799813554177,
+      36028797014376449
+    ],
+    "SCALE_FACTORS": [
+      24.0,
+      24.0
+    ]
+  },
+  {
+    "NAME": "EVI_IP1",
+    "PARENT": "EVI_IP0",
+    "PRIMES": [
+      1152921504606830593,
+      1032193
+    ],
+    "SCALE_FACTORS": [
+      34.0,
+      24.0
+    ]
+  },
+  {
+    "NAME": "EVI_QF",
+    "PARENT": "EVI_IP0",
+    "PRIMES": [
+      288230376135196673,
+      2251799810670593
+    ],
+    "SCALE_FACTORS": [
+      25.0,
+      25.0
+    ]
+  }
+]
