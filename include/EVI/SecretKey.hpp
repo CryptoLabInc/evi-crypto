@@ -79,7 +79,7 @@ EVI_API SecretKey makeSecKey(const std::string &file_path, const std::optional<S
  * @param s_info Optional sealing information for unsealing the secret key.
  * @return A new `SecretKey` instance.
  */
-EVI_API SecretKey makeSecKey(std::istream &stream, std::optional<SealInfo> s_info = std::nullopt);
+EVI_API SecretKey makeSecKey(std::istream &stream, const std::optional<SealInfo> &s_info = std::nullopt);
 
 /// @brief Alias representing multiple secret keys.
 using MultiSecretKey = std::vector<SecretKey>;

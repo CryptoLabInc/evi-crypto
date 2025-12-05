@@ -42,6 +42,18 @@ deb::Context getDebContext(const detail::Context &context) {
     return deb::getContext(getDebPreset(context));
 }
 
+deb::Context getDebContext(const std::string &preset) {
+    if (preset == "IP0") {
+        return deb::getContext(deb::PRESET_EVI_IP0);
+    } else if (preset == "IP1") {
+        return deb::getContext(deb::PRESET_EVI_IP1);
+    } else if (preset == "QF0" || preset == "QF1") {
+        return deb::getContext(deb::PRESET_EVI_QF);
+    } else {
+        throw InvalidInputError("Invalid preset in context");
+    }
+}
+
 std::optional<deb::RNGSeed> convertDebSeed(const std::optional<std::vector<u8>> &seed) {
     if (seed.has_value()) {
         if (seed->size() != sizeof(deb::RNGSeed)) {

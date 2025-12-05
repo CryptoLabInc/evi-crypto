@@ -75,9 +75,17 @@ void bind_key_generator(py::module_ &m) {
 
         .def("check_file_exist", &MultiKeyGenerator::checkFileExist)
         .def("generate_keys", static_cast<SecretKey (MultiKeyGenerator::*)()>(&MultiKeyGenerator::generateKeys))
-        .def("generate_keys_stream", [](MultiKeyGenerator &self) {
-            std::ostringstream os(std::ios::binary);
-            auto secret = self.generateKeys(os);
-            return py::make_tuple(secret, py::bytes(os.str()));
+        .def("generate_keys_stream",
+             [](MultiKeyGenerator &self) {
+                 std::ostringstream os(std::ios::binary);
+                 auto secret = self.generateKeys(os);
+                 return py::make_tuple(secret, py::bytes(os.str()));
+             })
+        .def("generate_keys_per_stream", [](MultiKeyGenerator &self) {
+            std::ostringstream sec(std::ios::binary);
+            std::ostringstream enc(std::ios::binary);
+            std::ostringstream eval(std::ios::binary);
+            auto secret = self.generateKeys(sec, enc, eval);
+            return py::make_tuple(secret, py::bytes(sec.str()), py::bytes(enc.str()), py::bytes(eval.str()));
         });
 }

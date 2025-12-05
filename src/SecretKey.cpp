@@ -34,12 +34,12 @@ SecretKey makeSecKey(const std::string &path, const std::optional<SealInfo> &s_i
     return SecretKey(std::make_shared<detail::SecretKey>(detail::makeSecKey(path, inner)));
 }
 
-SecretKey makeSecKey(std::istream &stream, std::optional<SealInfo> s_info) {
+SecretKey makeSecKey(std::istream &stream, const std::optional<SealInfo> &s_info) {
     std::optional<detail::SealInfo> inner;
     if (s_info.has_value()) {
         inner.emplace(*getImpl(s_info.value()));
     }
-    return SecretKey(std::make_shared<detail::SecretKey>(detail::makeSecKey(stream, std::move(inner))));
+    return SecretKey(std::make_shared<detail::SecretKey>(detail::makeSecKey(stream, inner)));
 }
 
 std::shared_ptr<detail::SecretKey> &getImpl(SecretKey &sec) noexcept {

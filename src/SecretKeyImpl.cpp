@@ -20,7 +20,8 @@
 #include "utils/DebUtils.hpp"
 #include "utils/Exceptions.hpp"
 #include "utils/Utils.hpp"
-#include <nlohmann/json.hpp>
+
+#include <deb/SecretKeyGenerator.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -28,8 +29,6 @@
 #include <fstream>
 #include <sstream>
 #include <utility>
-
-using json = nlohmann::json;
 
 namespace evi {
 namespace detail {
@@ -39,7 +38,8 @@ SecretKeyData::SecretKeyData(const Context &context) : deb_sk_(utils::getDebPres
     s_info_ = SealInfo(SealMode::NONE);
 }
 
-SecretKeyData::SecretKeyData(const std::string &path, std::optional<SealInfo> s_info) : deb_sk_(deb::PRESET_EVI_IP0) {
+SecretKeyData::SecretKeyData(const std::string &path, const std::optional<SealInfo> &s_info)
+    : deb_sk_(deb::PRESET_EVI_IP0) {
 
     s_info_ = s_info;
     if (!s_info.has_value() || s_info->s_mode == SealMode::NONE) {
@@ -49,8 +49,9 @@ SecretKeyData::SecretKeyData(const std::string &path, std::optional<SealInfo> s_
     }
 }
 
-SecretKeyData::SecretKeyData(std::istream &stream, std::optional<SealInfo> s_info) : deb_sk_(deb::PRESET_EVI_IP0) {
-    s_info_ = std::move(s_info);
+SecretKeyData::SecretKeyData(std::istream &stream, const std::optional<SealInfo> &s_info)
+    : deb_sk_(deb::PRESET_EVI_IP0) {
+    s_info_ = s_info;
     if (!s_info_.has_value() || s_info_.value().s_mode == SealMode::NONE) {
         loadSecKey(stream);
     } else {
@@ -83,27 +84,31 @@ void SecretKeyData::loadSecKey(const std::string &dir_path) {
 void SecretKeyData::loadSecKey(std::istream &in) {
     in.read(reinterpret_cast<char *>(&sec_loaded_), sizeof(bool));
     if (sec_loaded_) {
-        json j;
-        in >> j;
-        preset_ = utils::stringToPreset(j["ParameterPreset"].get<std::string>());
-        SealInfo s(utils::stringToSealMode(j["SealType"].get<std::string>()));
-        s_info_ = s;
+        char preset_buf[4];
+        in.read(preset_buf, sizeof(preset_buf));
+        preset_ = utils::stringToPreset(preset_buf);
 
-        // TODO : replace below with the following deb deserialize function
-        // deb::deserializeFromStream(in, deb_sk_);
-        // std::memcpy(sec_key_q_.data(), deb_sk_[0][0].data(), DEGREE * sizeof(u64));
-        // std::memcpy(sec_key_p_.data(), deb_sk_[0][1].data(), DEGREE * sizeof(u64));
-        // for (u64 i = 0; i < DEGREE; ++i) {
-        //     sec_coeff_[i] = static_cast<i64>(deb_sk_.coeffs()[i]);
-        // }
-        deb_sk_[0][0].setData(sec_key_q_.data(), DEGREE);
-        deb_sk_[0][1].setData(sec_key_p_.data(), DEGREE);
-        in.read(reinterpret_cast<char *>(sec_key_q_.data()), U64_DEGREE);
-        in.read(reinterpret_cast<char *>(sec_key_p_.data()), U64_DEGREE);
-        in.read(reinterpret_cast<char *>(sec_coeff_.data()), DEGREE * sizeof(i64));
+        std::vector<u8> bytes_2bit(DEGREE / 4);
+        in.read(reinterpret_cast<char *>(bytes_2bit.data()), bytes_2bit.size());
+        for (int i = 0; i < DEGREE / 4; ++i) {
+            int d_idx = i * 4;
+            u8 b = bytes_2bit[i];
+            u8 c0 = (b >> 6) & 0x03;
+            u8 c1 = (b >> 4) & 0x03;
+            u8 c2 = (b >> 2) & 0x03;
+            u8 c3 = (b >> 0) & 0x03;
+            sec_coeff_[d_idx + 0] = c0 | (-(c0 >> 1));
+            sec_coeff_[d_idx + 1] = c1 | (-(c1 >> 1));
+            sec_coeff_[d_idx + 2] = c2 | (-(c2 >> 1));
+            sec_coeff_[d_idx + 3] = c3 | (-(c3 >> 1));
+        }
         for (u64 i = 0; i < DEGREE; ++i) {
             deb_sk_.coeffs()[i] = static_cast<int8_t>(sec_coeff_[i]);
         }
+        auto deb_preset = utils::getDebContext(preset_buf)->get_preset();
+        deb_sk_ = deb::SecretKeyGenerator::GenSecretKeyFromCoeff(deb_preset, deb_sk_.coeffs());
+        std::memcpy(sec_key_q_.data(), deb_sk_[0][0].data(), detail::U64_DEGREE);
+        std::memcpy(sec_key_p_.data(), deb_sk_[0][1].data(), detail::U64_DEGREE);
     } else {
         throw evi::KeyNotLoadedError("Failed to load to secret key from buffer");
     }
@@ -126,18 +131,22 @@ void SecretKeyData::saveSecKey(std::ostream &out) const {
     if (!sec_loaded_) {
         throw evi::KeyNotLoadedError("Secret key is not loaded to be saved");
     }
+    std::string preset_str = utils::assignParameterString(preset_);
+    preset_str.resize(4, '\0');
+    char byte = 0x01;
+    out.write(&byte, sizeof(byte));
+    out.write(preset_str.data(), preset_str.size());
 
-    out.write(reinterpret_cast<const char *>(&sec_loaded_), sizeof(bool));
-    json j;
-    j["ParameterPreset"] = utils::assignParameterString(preset_);
-    j["SealType"] = utils::assignSealModeString(s_info_.value().s_mode);
-    out << std::setw(4) << j;
-
-    // TODO : replace below with the following deb serialize function
-    // deb::serializeToStream(deb_sk_, out);
-    out.write(reinterpret_cast<const char *>(sec_key_q_.data()), U64_DEGREE);
-    out.write(reinterpret_cast<const char *>(sec_key_p_.data()), U64_DEGREE);
-    out.write(reinterpret_cast<const char *>(sec_coeff_.data()), DEGREE * sizeof(i64));
+    std::vector<u8> bytes_2bit(DEGREE / 4, 0);
+    for (int i = 0; i < DEGREE / 4; i++) {
+        int d_idx = i * 4;
+        u8 c0 = static_cast<u8>(sec_coeff_.data()[d_idx + 0]) & 0x03;
+        u8 c1 = static_cast<u8>(sec_coeff_.data()[d_idx + 1]) & 0x03;
+        u8 c2 = static_cast<u8>(sec_coeff_.data()[d_idx + 2]) & 0x03;
+        u8 c3 = static_cast<u8>(sec_coeff_.data()[d_idx + 3]) & 0x03;
+        bytes_2bit[i] = static_cast<u8>((c0 << 6) | (c1 << 4) | (c2 << 2) | (c3 << 0));
+    }
+    out.write(reinterpret_cast<const char *>(bytes_2bit.data()), bytes_2bit.size());
 }
 
 void SecretKeyData::serialize(std::ostream &out) const {
@@ -242,8 +251,8 @@ SecretKey makeSecKey(const std::string &path, const std::optional<SealInfo> &s_i
     return std::make_shared<SecretKeyData>(path, s_info);
 }
 
-SecretKey makeSecKey(std::istream &stream, std::optional<SealInfo> s_info) {
-    return std::make_shared<SecretKeyData>(stream, std::move(s_info));
+SecretKey makeSecKey(std::istream &stream, const std::optional<SealInfo> &s_info) {
+    return std::make_shared<SecretKeyData>(stream, s_info);
 }
 
 } // namespace detail

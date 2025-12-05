@@ -32,6 +32,8 @@ deb::Preset getDebPreset(const detail::Context &context);
 
 deb::Context getDebContext(const detail::Context &context);
 
+deb::Context getDebContext(const std::string &preset);
+
 std::optional<deb::RNGSeed> convertDebSeed(const std::optional<std::vector<u8>> &seed);
 
 bool syncFixedKeyToDebSwkKey(const detail::Context &context, const detail::FixedKeyType &fixed, deb::SwitchKey &swk);

@@ -22,6 +22,7 @@ pybind11_add_module(
   bind_decryptor.cpp
   bind_encryptor.cpp
   bind_key_generator.cpp
+  bind_key_manager.cpp
   bind_keypack.cpp
   bind_utils.cpp
   bind_types.cpp

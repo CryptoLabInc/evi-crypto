@@ -66,6 +66,12 @@ SecretKey MultiKeyGenerator::generateKeys(std::ostream &os) {
     return sk_ptr;
 }
 
+SecretKey MultiKeyGenerator::generateKeys(std::ostream &seckey, std::ostream &enckey, std::ostream &evalkey) {
+    std::shared_ptr<detail::SecretKey> sk_ptr = std::make_shared<detail::SecretKey>();
+    *sk_ptr = impl_->generateKeys(seckey, enckey, evalkey);
+    return sk_ptr;
+}
+
 bool MultiKeyGenerator::checkFileExist() const {
     return impl_->checkFileExist();
 }

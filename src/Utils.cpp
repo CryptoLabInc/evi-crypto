@@ -39,6 +39,46 @@ namespace evi {
 namespace detail {
 namespace fs = std::filesystem;
 
+std::string utils::encodeToBase64(const std::vector<uint8_t> &data) {
+    BIO *bio = BIO_new(BIO_s_mem());
+    BIO *b64 = BIO_new(BIO_f_base64());
+    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+    bio = BIO_push(b64, bio);
+
+    BIO_write(bio, data.data(), static_cast<int>(data.size()));
+    BIO_flush(bio);
+
+    BUF_MEM *buffer_ptr;
+    BIO_get_mem_ptr(bio, &buffer_ptr);
+
+    std::string encoded(buffer_ptr->data, buffer_ptr->length);
+    BIO_free_all(bio);
+    return encoded;
+}
+
+std::string utils::encodeToBase64(const std::string &str) {
+    std::vector<uint8_t> data(str.begin(), str.end());
+    return encodeToBase64(data);
+}
+
+std::vector<uint8_t> utils::decodeBase64(const std::string &encoded) {
+    BIO *bio = BIO_new_mem_buf(encoded.data(), static_cast<int>(encoded.size()));
+    BIO *b64 = BIO_new(BIO_f_base64());
+    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+    bio = BIO_push(b64, bio);
+
+    std::vector<uint8_t> decoded(encoded.size());
+    int decoded_len = BIO_read(bio, decoded.data(), static_cast<int>(decoded.size()));
+    BIO_free_all(bio);
+
+    if (decoded_len < 0) {
+        throw std::runtime_error("Base64 decoding failed");
+    }
+
+    decoded.resize(decoded_len);
+    return decoded;
+}
+
 void utils::serializeQueryTo(const Query &query, std::ostream &os) {
     QueryType query_type = QueryType::SINGLE;
     uint8_t query_type_raw = static_cast<uint8_t>(query_type);
@@ -174,6 +214,28 @@ std::string utils::assignParameterString(evi::ParameterPreset preset) {
     }
 }
 
+std::string utils::assignEvalModeString(evi::EvalMode mode) {
+    switch (mode) {
+    case evi::EvalMode::RMP: {
+        return "RMP";
+    }
+    case evi::EvalMode::RMS: {
+        return "RMS";
+    }
+    case evi::EvalMode::MS: {
+        return "MS";
+    }
+    case evi::EvalMode::FLAT: {
+        return "FLAT";
+    }
+    case evi::EvalMode::MM: {
+        return "MM";
+    }
+    default:
+        return "NULL";
+    }
+}
+
 std::string utils::assignSealModeString(evi::SealMode s_mode) {
     switch (s_mode) {
     case evi::SealMode::AES_KEK: {
@@ -195,10 +257,10 @@ void utils::serializeString(const std::string &str, std::ostream &out) {
 }
 
 // Serialize the directory structure into an ostringstream
-void utils::serializeEvalKey(const std::string &dir_path, const std::string &out_key_data) {
-    std::ofstream out(out_key_data, std::ios::binary);
-    for (const auto &entry : fs::recursive_directory_iterator(dir_path)) {
-        std::string relative_path = fs::relative(entry.path(), dir_path).string();
+void utils::serializeEvalKey(const std::string &key_dir_path, const std::string &out_file_path) {
+    std::ofstream out(out_file_path, std::ios::binary);
+    for (const auto &entry : fs::recursive_directory_iterator(key_dir_path)) {
+        std::string relative_path = fs::relative(entry.path(), key_dir_path).string();
 
         if (fs::is_directory(entry.status())) {
             // Serialize directory
@@ -237,12 +299,12 @@ void utils::serializeEvalKey(const std::string &dir_path, const std::string &out
             fs::remove(entry.path());
         }
     }
-    for (auto it = fs::recursive_directory_iterator(dir_path, fs::directory_options::skip_permission_denied),
+    for (auto it = fs::recursive_directory_iterator(key_dir_path, fs::directory_options::skip_permission_denied),
               end = fs::recursive_directory_iterator();
          it != end;) {
         if (fs::is_directory(it->path()) && fs::is_empty(it->path())) {
-            fs::remove(it->path());                          // Remove empty directory
-            it = fs::recursive_directory_iterator(dir_path); // Restart iterator due to potential structure change
+            fs::remove(it->path());                              // Remove empty directory
+            it = fs::recursive_directory_iterator(key_dir_path); // Restart iterator due to potential structure change
         } else {
             ++it;
         }
@@ -260,13 +322,13 @@ void utils::deserializeString(std::istream &in, std::string &str) {
 }
 
 // Deserialize the directory structure from an istringstream
-void utils::deserializeEvalKey(const std::string &key_path, const std::string &out_dir, bool delete_after) {
-    const fs::path output_dir(out_dir);
+void utils::deserializeEvalKey(const std::string &key_file_path, const std::string &out_dir_path, bool delete_after) {
+    const fs::path output_dir(out_dir_path);
     if (!fs::exists(output_dir)) {
         fs::create_directory(output_dir);
     }
 
-    std::ifstream in(key_path, std::ios::binary);
+    std::ifstream in(key_file_path, std::ios::binary);
     while (in.peek() != EOF) {
         char type;
         in.read(&type, sizeof(type)); // Read type ('D' or 'F')
@@ -298,7 +360,7 @@ void utils::deserializeEvalKey(const std::string &key_path, const std::string &o
 
     in.close();
     if (delete_after) {
-        fs::remove(fs::path(key_path));
+        fs::remove(fs::path(key_file_path));
     }
 }
 
