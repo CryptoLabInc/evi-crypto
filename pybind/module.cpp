@@ -25,6 +25,7 @@ namespace py = pybind11;
 void bind_types(py::module_ &m);
 void bind_context(py::module_ &m);
 void bind_keypack(py::module_ &m);
+void bind_key_manager(py::module_ &m);
 void bind_key_generator(py::module_ &m);
 void bind_encryptor(py::module_ &m);
 void bind_decryptor(py::module_ &m);
@@ -39,6 +40,7 @@ PYBIND11_MODULE(evi, m) {
     bind_context(m);
     bind_types(m);
     bind_keypack(m);
+    bind_key_manager(m);
     bind_key_generator(m);
     bind_encryptor(m);
     bind_decryptor(m);

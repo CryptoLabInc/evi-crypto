@@ -30,8 +30,8 @@
 using namespace evi::detail;
 
 int main(int argc, char **argv) {
-    std::vector<u8> seed[2] = {std::vector<u8>(SEED_MIN_SIZE), std::vector<u8>(SEED_MIN_SIZE)};
-    for (u32 i = 0; i < SEED_MIN_SIZE / 4; i++) {
+    std::vector<u8> seed[2] = {std::vector<u8>(evi::SEED_MIN_SIZE), std::vector<u8>(evi::SEED_MIN_SIZE)};
+    for (u32 i = 0; i < evi::SEED_MIN_SIZE / 4; i++) {
         u32 val = rand();
         memcpy(seed[0].data() + i * 4, &val, sizeof(val));
         for (int j = 0; j < 4; j++) {

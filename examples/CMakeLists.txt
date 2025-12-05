@@ -32,3 +32,6 @@ if(BUILD_WITH_VALGRIND)
 endif()
 
 evi_add_example(keygen keygen.cpp)
+if(BUILD_KEY_MANAGEMENT)
+  evi_add_example(km_kp km_kp.cpp)
+endif()

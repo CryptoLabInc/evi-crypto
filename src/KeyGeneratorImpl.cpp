@@ -27,8 +27,13 @@
 #include "utils/Utils.hpp"
 #include <nlohmann/json.hpp>
 
+#include "EVI/impl/KeyGeneratorImpl.hpp"
+
+#include <SecretKeyGenerator.hpp>
+
 #include <algorithm>
 #include <cstring>
+#include <random>
 
 // deb header
 #include <deb/SecretKeyGenerator.hpp>
@@ -527,10 +532,25 @@ bool MultiKeyGenerator::saveAllKeys(SecretKey &sec_key) {
     }
     saveEncKey();
     saveEviSecKey(sec_key);
-    if (evi_context_[0]->getEvalMode() != EvalMode::MM) {
-        saveEvalKey();
-    }
+    saveEvalKey();
     return true;
+}
+
+SecretKey MultiKeyGenerator::generateKeys(std::ostream &seckey, std::ostream &enckey, std::ostream &evalkey) {
+    if (!fs::exists(store_path_)) {
+        fs::create_directories(store_path_);
+    }
+    SecretKey sk = generateSecKey();
+    sk->serialize(seckey);
+    generatePubKey(sk);
+    evi_keypack_[0]->getEncKeyBuffer(enckey);
+    saveEvalKey();
+    std::filesystem::path eval_path = store_path_ / "EvalKey.bin";
+    std::ifstream eval(eval_path, std::ios::binary);
+    evalkey << eval.rdbuf();
+    eval.close();
+    fs::remove(eval_path);
+    return sk;
 }
 
 void MultiKeyGenerator::saveEncKey() {
@@ -556,27 +576,41 @@ void MultiKeyGenerator::saveEviSecKey(SecretKey &sec_key) {
 }
 
 void MultiKeyGenerator::saveEvalKey() {
-    fs::path meta_path = fs::path(store_path_.string()) / "metadata-eval.json";
+    if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
+        return;
+    }
+
+    fs::path tmp_store_path =
+        store_path_ /
+        (".tmp-evalkey-" + std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
+    if (!fs::exists(tmp_store_path)) {
+        fs::create_directories(tmp_store_path);
+    }
+
+    fs::path meta_path = tmp_store_path / "metadata-eval.json";
     std::ofstream meta(meta_path);
     json j;
 
     j["ParameterPreset"] = utils::assignParameterString(preset_);
+    j["EvalMode"] = utils::assignEvalModeString(evi_context_[0]->getEvalMode());
     j["Ranks"] = rank_list_;
 
     meta << std::setw(4) << j << std::endl;
     meta.close();
     if (evi_context_[0]->getEvalMode() == EvalMode::RMP) {
         for (int i = 0; i < inner_rank_list_.size(); i++) {
-            std::string path = (store_path_.string() + "/EVIKeys" + std::to_string(inner_rank_list_[i].first) + ".bin");
+            std::string path =
+                (tmp_store_path.string() + "/EVIKeys" + std::to_string(inner_rank_list_[i].first) + ".bin");
             evi_keypack_[i]->saveEvalKeyFile(path);
         }
     } else {
         for (int i = 0; i < rank_list_.size(); i++) {
-            std::string path = (store_path_.string() + "/EVIKeys" + std::to_string(rank_list_[i]) + ".bin");
+            std::string path = (tmp_store_path.string() + "/EVIKeys" + std::to_string(rank_list_[i]) + ".bin");
             evi_keypack_[i]->saveEvalKeyFile(path);
         }
     }
-    utils::serializeEvalKey(store_path_.string(), store_path_.string() + "/EvalKey.bin");
+    utils::serializeEvalKey(tmp_store_path.string(), store_path_.string() + "/EvalKey.bin");
+    fs::remove_all(tmp_store_path);
 }
 
 bool MultiKeyGenerator::checkFileExist() {

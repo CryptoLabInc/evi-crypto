@@ -84,7 +84,9 @@ void EncryptorImpl<M>::loadEncKey(std::istream &in) {
     // TODO: replace bellow with the following deb function
     // deb::deserializeFromStream(in, deb_enc_key_);
     // utils::syncDebSwkKeyToFixedKey(context_, deb_enc_key_, encKey);
+    char preset_buf[4];
     in.read(reinterpret_cast<char *>(&enc_loaded_), sizeof(bool));
+    in.read(preset_buf, sizeof(preset_buf));
     in.read(reinterpret_cast<char *>(encKey_->getPolyData(1, 0)), U64_DEGREE);
     in.read(reinterpret_cast<char *>(encKey_->getPolyData(1, 1)), U64_DEGREE);
     in.read(reinterpret_cast<char *>(encKey_->getPolyData(0, 0)), U64_DEGREE);

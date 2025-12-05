@@ -67,10 +67,13 @@ void KeyPackData::getEncKeyBuffer(std::ostream &os) const {
     if (!enc_loaded_) {
         throw evi::KeyNotLoadedError("Encryption key is not loaded to be saved");
     }
-
+    std::string preset_str = utils::assignParameterString(context_->getParam()->getPreset());
+    preset_str.resize(4, '\0');
+    char byte = 0x02;
+    os.write(&byte, sizeof(byte));
+    os.write(preset_str.data(), preset_str.size());
     // TODO: replace below with the following deb serialize function
     // deb::serializeToStream(deb_enc_key, os);
-    os.write(reinterpret_cast<const char *>(&enc_loaded_), sizeof(bool));
     os.write(reinterpret_cast<const char *>(enckey->getPolyData(1, 0)), U64_DEGREE);
     os.write(reinterpret_cast<const char *>(enckey->getPolyData(1, 1)), U64_DEGREE);
     os.write(reinterpret_cast<const char *>(enckey->getPolyData(0, 0)), U64_DEGREE);
@@ -85,7 +88,9 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
     // TODO: replace below with the following deb serialize function
     // deb::serializeToStream(deb_relin_key, out);
     // deb::serializeToStream(deb_mod_pack_key, out);
-    out.write(reinterpret_cast<const char *>(&eval_loaded_), sizeof(bool));
+    char byte = 0x03;
+    out.write(&byte, sizeof(byte));
+    // preset, dim, eval
     out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 0)), U64_DEGREE);
     out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 1)), U64_DEGREE);
     out.write(reinterpret_cast<const char *>(relin_key->getPolyData(0, 0)), U64_DEGREE);
@@ -229,7 +234,9 @@ void KeyPackData::loadEncKeyBuffer(std::istream &is) {
     // deb::deserializeFromStream(is, deb_enc_key);
     // utils::syncDebSwkKeyToFixedKey(context_, deb_enc_key, enckey);
     // enc_loaded_ = true;
+    char preset_buf[4];
     is.read(reinterpret_cast<char *>(&enc_loaded_), sizeof(bool));
+    is.read(preset_buf, sizeof(preset_buf));
     is.read(reinterpret_cast<char *>(enckey->getPolyData(1, 0)), U64_DEGREE);
     is.read(reinterpret_cast<char *>(enckey->getPolyData(1, 1)), U64_DEGREE);
     is.read(reinterpret_cast<char *>(enckey->getPolyData(0, 0)), U64_DEGREE);

@@ -107,6 +107,7 @@ public:
 
     SecretKey generateKeys();
     SecretKey generateKeys(std::ostream &os);
+    SecretKey generateKeys(std::ostream &seckey, std::ostream &enckey, std::ostream &evalkey);
     SecretKey generateSecKey();
 
     void generateKeysFromSecKey(const std::string &sec_key_path);
@@ -136,7 +137,7 @@ private:
 
     void initialize();
 
-    bool saveAllKeys(SecretKey &sec_key);
+    bool saveAllKeys(SecretKey &seckey);
     void saveEncKey();
     void saveEvalKey();
 

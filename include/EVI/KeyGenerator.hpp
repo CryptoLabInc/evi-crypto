@@ -134,6 +134,8 @@ public:
      */
     SecretKey generateKeys(std::ostream &os);
 
+    SecretKey generateKeys(std::ostream &seckey, std::ostream &enckey, std::ostream &evalkey);
+
 private:
     std::shared_ptr<detail::MultiKeyGenerator> impl_;
 };

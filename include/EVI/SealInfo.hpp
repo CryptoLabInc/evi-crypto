@@ -27,6 +27,8 @@ namespace evi {
 
 /// @brief AES-256 key size in bytes.
 constexpr int AES256_KEY_SIZE = 32;
+constexpr int AES_GCM_IV_SIZE = 12;
+constexpr int AES_GCM_TAG_SIZE = 16;
 
 namespace detail {
 class SealInfo;

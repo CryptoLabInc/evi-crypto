@@ -21,6 +21,11 @@
 #include <cstdint>
 namespace evi {
 
+enum class KeyVersion : uint8_t {
+    UNINITIALIZED = 0,
+    V1 = 1,
+};
+
 /**
  * @enum ParameterPreset
  * @brief Predefined parameter sets for homomorphic encryption.

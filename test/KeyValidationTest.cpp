@@ -165,6 +165,9 @@ TEST_F(KeyValidationTest, EncKeySaveLoad) {
     auto *kd_loaded = dynamic_cast<KeyPackData *>(kp_loaded.get());
     for (size_t i = 0; i < DEGREE; ++i) {
         EXPECT_EQ(kd->enckey->getPolyData(1, 0)[i], kd_loaded->enckey->getPolyData(1, 0)[i]);
+        EXPECT_EQ(kd->enckey->getPolyData(1, 1)[i], kd_loaded->enckey->getPolyData(1, 1)[i]);
+        EXPECT_EQ(kd->enckey->getPolyData(0, 0)[i], kd_loaded->enckey->getPolyData(0, 0)[i]);
+        EXPECT_EQ(kd->enckey->getPolyData(0, 1)[i], kd_loaded->enckey->getPolyData(0, 1)[i]);
     }
 }
 

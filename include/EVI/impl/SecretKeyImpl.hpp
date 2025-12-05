@@ -45,8 +45,8 @@ namespace fs = std::filesystem;
 namespace detail {
 struct SecretKeyData {
     SecretKeyData(const evi::detail::Context &context);
-    SecretKeyData(const std::string &path, std::optional<SealInfo> s_info = std::nullopt);
-    SecretKeyData(std::istream &stream, std::optional<SealInfo> s_info = std::nullopt);
+    SecretKeyData(const std::string &path, const std::optional<SealInfo> &s_info = std::nullopt);
+    SecretKeyData(std::istream &stream, const std::optional<SealInfo> &s_info = std::nullopt);
 
     void loadSecKey(const std::string &dir_path);
     void loadSecKey(std::istream &is);
@@ -92,7 +92,7 @@ public:
 
 SecretKey makeSecKey(const evi::detail::Context &context);
 SecretKey makeSecKey(const std::string &path, const std::optional<SealInfo> &s_info = std::nullopt);
-SecretKey makeSecKey(std::istream &stream, std::optional<SealInfo> s_info = std::nullopt);
+SecretKey makeSecKey(std::istream &stream, const std::optional<SealInfo> &s_info = std::nullopt);
 
 using MultiSecretKey = std::vector<std::shared_ptr<SecretKeyData>>;
 

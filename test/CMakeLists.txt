@@ -34,6 +34,8 @@ set(LINK_LIBRARIES ${PROJECT_LIB_NAME} gtest_main)
 function(evi_add_test target)
   add_executable(${target} ${ARGN})
   target_link_libraries(${target} PRIVATE ${LINK_LIBRARIES})
+  target_compile_definitions(${target}
+                             PRIVATE EVI_PROJECT_ROOT=\"${PROJECT_SOURCE_DIR}\")
   add_gtest_target_to_ctest(${target})
 endfunction()
 
@@ -42,3 +44,5 @@ evi_add_test(EnDecryptTest EnDecryptTest.cpp utils.cpp)
 evi_add_test(ContextTest ContextTest.cpp utils.cpp)
 
 evi_add_test(KeyValidationTest KeyValidationTest.cpp utils.cpp)
+
+evi_add_test(KeyManagementTest KeyManagementTest.cpp)

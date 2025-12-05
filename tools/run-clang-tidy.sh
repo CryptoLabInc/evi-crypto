@@ -71,10 +71,38 @@ if [[ ${#files[@]} -eq 0 ]]; then
   exit 0
 fi
 
+extra_args_before=()
+extra_args=()
+if command -v clang++ >/dev/null 2>&1; then
+  resource_dir=$(clang++ -print-resource-dir 2>/dev/null || true)
+elif command -v clang >/dev/null 2>&1; then
+  resource_dir=$(clang -print-resource-dir 2>/dev/null || true)
+else
+  resource_dir=""
+fi
+if [[ -n "${resource_dir}" && -d "${resource_dir}/include" ]]; then
+  extra_args_before+=("--extra-arg-before=-isystem${resource_dir}/include")
+fi
+# Deduce the libstdc++ include paths from the default g++ toolchain so that
+# clang-tidy can find standard headers even if clang does not auto-detect the
+# correct GCC version.
+if command -v g++ >/dev/null 2>&1; then
+  mapfile -t gxx_includes < <(
+    printf '' | g++ -xc++ -E -Wp,-v - 2>&1 |
+      awk '/#include <\.\.\.> search starts here:/{flag=1; next}
+           /End of search list\./{flag=0}
+           flag { gsub(/^[[:space:]]+/, ""); print }'
+  )
+  for include in "${gxx_includes[@]}"; do
+    [[ -d "${include}" ]] || continue
+    extra_args+=("--extra-arg=-isystem${include}")
+  done
+fi
+
 status=0
 for file in "${files[@]}"; do
   echo "[clang-tidy] ${file}"
-  if ! clang-tidy --warnings-as-errors=* -p "${BUILD_DIR}" "${file}"; then
+  if ! clang-tidy --warnings-as-errors=* -p "${BUILD_DIR}" "${extra_args_before[@]}" "${extra_args[@]}" "${file}"; then
     status=1
   fi
 done
