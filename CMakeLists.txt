@@ -37,9 +37,10 @@ include(CCache OPTIONAL)
 
 option(BUILD_TEST "Build tests" ON)
 option(BUILD_EXAMPLE "Build Examples" ON)
+option(BUILD_KEY_MANAGEMENT "Build key management components" ON)
 option(BUILD_YUBIHSM "Use HSM for secret key encryption" OFF)
 option(BUILD_WITH_VALGRIND
-       "Build using Valgrind to check constant-time sampler" ON)
+       "Build using Valgrind to check constant-time sampler" OFF)
 option(BUILD_WITH_CUDA "Build with CUDA acceleration" OFF)
 option(BUILD_AS_STATIC "Build library as static" ON)
 option(USE_PROFILE "Activate Perfetto profiler" OFF)
@@ -93,6 +94,7 @@ endif()
 
 message(STATUS "BUILD_TEST=${BUILD_TEST}")
 message(STATUS "BUILD_EXAMPLE=${BUILD_EXAMPLE}")
+message(STATUS "BUILD_KEY_MANAGEMENT=${BUILD_KEY_MANAGEMENT}")
 message(STATUS "BUILD_AS_STATIC=${BUILD_AS_STATIC}")
 message(STATUS "USE_PROFILE=${USE_PROFILE}")
 message(STATUS "BUILD_PYTHON=${BUILD_PYTHON}")
@@ -155,6 +157,11 @@ list(APPEND ENC_DEC_SRCS ${EVI_SRCS})
 
 # Aggregate sources for the main library.
 set(PROJECT_MAIN_SRCS ${KEYGEN_SRCS} ${ENC_DEC_SRCS})
+
+if(BUILD_KEY_MANAGEMENT)
+  list(APPEND PROJECT_MAIN_SRCS src/km/KeyManager.cpp src/km/KeyManagerImpl.cpp
+       src/km/KeyProviderImpl.cpp)
+endif()
 
 if(BUILD_AS_STATIC)
   add_library(${PROJECT_LIB_NAME} STATIC ${PROJECT_MAIN_SRCS})
