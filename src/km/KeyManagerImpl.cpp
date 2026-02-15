@@ -263,7 +263,7 @@ void KeyManagerV1::unwrapEncKey(const std::string &file_path, const std::string 
 
 void KeyManagerV1::unwrapEncKey(std::istream &key_stream, IKeyPack &keypack) {
     std::stringstream ss;
-    provider_->decapSecKey(key_stream, ss);
+    provider_->decapEncKey(key_stream, ss);
     ss.seekg(0);
     keypack.loadEncKeyBuffer(ss);
 }
@@ -296,14 +296,10 @@ void KeyManagerV1::wrapSecKey(const std::string &key_id, std::istream &key_strea
 }
 
 void KeyManagerV1::wrapSecKey(const std::string &key_id, const SecretKey &seckey, std::ostream &out_stream) {
-    const auto now = std::chrono::system_clock::now();
-    const std::string created_at = makeIso8601(now);
-    const std::string expires_at = makeIso8601(now + std::chrono::hours(24 * 365 * 5));
-
     std::stringstream ss;
     seckey->saveSecKey(ss);
     ss.seekg(0);
-    wrapSecKey(key_id, seckey, out_stream);
+    wrapSecKey(key_id, ss, out_stream);
 }
 
 void KeyManagerV1::unwrapSecKey(const std::string &file_path, const std::string &out_path, const SealInfo &s_info) {
@@ -321,7 +317,8 @@ void KeyManagerV1::unwrapSecKey(std::istream &in_stream, SecretKey &seckey, cons
     if (s_info.s_mode == SealMode::NONE) {
         seckey->loadSecKey(ss);
     } else {
-        //
+        throw NotSupportedError("SealMode::" + std::to_string(static_cast<int>(s_info.s_mode)) +
+                                " is not yet supported for SecretKey unwrap");
     }
 }
 
