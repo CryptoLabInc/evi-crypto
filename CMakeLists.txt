@@ -173,6 +173,11 @@ set_property(TARGET ${PROJECT_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
 #
 target_compile_definitions(${PROJECT_LIB_NAME}
                            PUBLIC alignment_byte=${ALIGNMENT_BYTE})
+if(BUILD_AS_STATIC)
+  target_compile_definitions(${PROJECT_LIB_NAME} PUBLIC EVI_STATIC)
+else()
+  target_compile_definitions(${PROJECT_LIB_NAME} PRIVATE EVI_BUILDING_LIB)
+endif()
 
 # Core dependencies
 find_package(OpenSSL REQUIRED)

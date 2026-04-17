@@ -19,8 +19,11 @@
 #pragma once
 #include "EVI/Enums.hpp"
 #include "EVI/Export.hpp"
+#include <cstddef>
 #include <cstdint>
+#include <iosfwd>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace evi {
