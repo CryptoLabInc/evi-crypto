@@ -205,8 +205,7 @@ Query EncryptorImpl<M>::encrypt(const span<float> msg, const MultiSecretKey &sec
         for (u64 i = 0; i < item_per_ciphertext; ++i) {
             i64 temp = static_cast<i64>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
             bool is_positive = temp >= 0;
-            u64 abs_temp = is_positive ? static_cast<u64>(temp)
-                                       : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
+            u64 abs_temp = is_positive ? static_cast<u64>(temp) : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
 
             u64 value_q = reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
                                         context_->getParam()->getTwoTo64Q(), context_->getParam()->getTwoTo64ShoupQ(),
@@ -628,8 +627,7 @@ Query EncryptorImpl<M>::encode(const span<float> msg, const EncodeType type, con
             for (u64 i = 0; i < tmp_rank; ++i) {
                 i64 temp = static_cast<i64>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
                 bool is_positive = temp >= 0;
-                u64 abs_temp = is_positive ? static_cast<u64>(temp)
-                                           : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
+                u64 abs_temp = is_positive ? static_cast<u64>(temp) : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
 
                 u64 value_q =
                     reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
@@ -679,8 +677,7 @@ Query::SingleQuery EncryptorImpl<M>::innerEncode(const span<float> &msg, const b
     for (u64 i = 0; i < num_iter; ++i) {
         i64 temp = static_cast<i64>(msg[i] * scale + signBiasDouble(msg[i]));
         i64 is_positive = temp >= 0;
-        u64 abs_temp = is_positive ? static_cast<u64>(temp)
-                                   : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
+        u64 abs_temp = is_positive ? static_cast<u64>(temp) : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
 
         u64 value_q = reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
                                     context_->getParam()->getTwoTo64Q(), context_->getParam()->getTwoTo64ShoupQ(),

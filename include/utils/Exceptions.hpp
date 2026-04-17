@@ -56,7 +56,8 @@ private:
     struct IsStreamInsertable : std::false_type {};
 
     template <typename T>
-    struct IsStreamInsertable<T, std::void_t<decltype(std::declval<std::ostringstream &>() << std::declval<const T &>())>>
+    struct IsStreamInsertable<T,
+                              std::void_t<decltype(std::declval<std::ostringstream &>() << std::declval<const T &>())>>
         : std::true_type {};
 
     template <typename T>
