@@ -34,6 +34,10 @@ set(DEB_PARAMETER_JSON
     "${CMAKE_CURRENT_SOURCE_DIR}/deb-param.json"
     CACHE STRING "" FORCE)
 set(DEB_MEMORY_ALIGN_SIZE_VALUE "${ALIGNMENT_BYTE}")
+if(MSVC)
+  # deb still uses std::aligned_alloc in one allocation path, which MSVC does
+  # not provide. Disable deb's explicit alignment there until upstream is fixed.
+  set(DEB_MEMORY_ALIGN_SIZE_VALUE 0)
 endif()
 set(DEB_MEMORY_ALIGN_SIZE
     "${DEB_MEMORY_ALIGN_SIZE_VALUE}"
