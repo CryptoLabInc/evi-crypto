@@ -33,39 +33,29 @@ endif()
 set(DEB_PARAMETER_JSON
     "${CMAKE_CURRENT_SOURCE_DIR}/deb-param.json"
     CACHE STRING "" FORCE)
+set(DEB_MEMORY_ALIGN_SIZE_VALUE "${ALIGNMENT_BYTE}")
+if(MSVC)
+  # deb still uses std::aligned_alloc in one allocation path, which MSVC does
+  # not provide. Disable deb's explicit alignment there until upstream is fixed.
+  set(DEB_MEMORY_ALIGN_SIZE_VALUE 0)
+endif()
 set(DEB_MEMORY_ALIGN_SIZE
-    "${ALIGNMENT_BYTE}"
+    "${DEB_MEMORY_ALIGN_SIZE_VALUE}"
     CACHE STRING "" FORCE)
 
-if(DEFINED ENV{GITHUB_TOKEN})
-  cpmaddpackage(
-    NAME
-    deb
-    GIT_REPOSITORY
-    "https://$ENV{GITHUB_TOKEN}@github.com/CryptoLabInc/deb.git"
-    GIT_TAG
-    v0.2.1
-    OPTIONS
-    "DEB_BUILD_EXAMPLES OFF"
-    "DEB_BUILD_TEST OFF"
-    "DEB_BUILD_WITH_OMP OFF"
-    "DEB_INSTALL_ALEA ON"
-    "DEB_RUNTIME_RESOURCE_CHECK OFF")
-else()
-  cpmaddpackage(
-    NAME
-    deb
-    GITHUB_REPOSITORY
-    CryptoLabInc/deb
-    GIT_TAG
-    v0.2.1
-    OPTIONS
-    "DEB_BUILD_EXAMPLES OFF"
-    "DEB_BUILD_TEST OFF"
-    "DEB_BUILD_WITH_OMP OFF"
-    "DEB_INSTALL_ALEA ON"
-    "DEB_RUNTIME_RESOURCE_CHECK OFF")
-endif()
+cpmaddpackage(
+  NAME
+  deb
+  GITHUB_REPOSITORY
+  CryptoLabInc/deb
+  GIT_TAG
+  03241f43cfef63b4e0094e96ddb445e4ab59287b # deb 26.04.17 main (v0.3.1 + MinGW)
+  OPTIONS
+  "DEB_BUILD_EXAMPLES OFF"
+  "DEB_BUILD_TEST OFF"
+  "DEB_BUILD_WITH_OMP OFF"
+  "DEB_INSTALL_ALEA ON"
+  "DEB_RUNTIME_RESOURCE_CHECK OFF")
 
 # ---------------------------------------------------------
 # nlohmann_json

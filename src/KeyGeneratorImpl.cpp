@@ -478,7 +478,7 @@ SecretKey MultiKeyGenerator::generateKeys() {
 
 SecretKey MultiKeyGenerator::generateKeys(std::ostream &os) {
     SecretKey sec_key = generateKeys();
-    utils::serializeKeyFiles(store_path_, os);
+    utils::serializeKeyFiles(store_path_.string(), os);
     std::filesystem::remove_all(store_path_);
     return sec_key;
 }
@@ -554,24 +554,24 @@ SecretKey MultiKeyGenerator::generateKeys(std::ostream &seckey, std::ostream &en
 }
 
 void MultiKeyGenerator::saveEncKey() {
-    evi_keypack_[0]->saveEncKeyFile(fs::path(store_path_ / "EncKey.bin"));
+    evi_keypack_[0]->saveEncKeyFile((store_path_ / "EncKey.bin").string());
 }
 
 SecretKey MultiKeyGenerator::saveEviSecKey() {
     SecretKey sec_key = generateSecKey();
     if (s_info_->s_mode == SealMode::NONE) {
-        sec_key->saveSecKey(fs::path(store_path_ / "SecKey.bin"));
+        sec_key->saveSecKey((store_path_ / "SecKey.bin").string());
     } else {
-        sec_key->saveSealedSecKey(fs::path(store_path_ / "SecKey_sealed.bin"));
+        sec_key->saveSealedSecKey((store_path_ / "SecKey_sealed.bin").string());
     }
     return sec_key;
 }
 
 void MultiKeyGenerator::saveEviSecKey(SecretKey &sec_key) {
     if (s_info_->s_mode == SealMode::NONE) {
-        sec_key->saveSecKey(fs::path(store_path_ / "SecKey.bin"));
+        sec_key->saveSecKey((store_path_ / "SecKey.bin").string());
     } else {
-        sec_key->saveSealedSecKey(fs::path(store_path_ / "SecKey_sealed.bin"));
+        sec_key->saveSealedSecKey((store_path_ / "SecKey_sealed.bin").string());
     }
 }
 

@@ -38,7 +38,6 @@
 
 // deb header
 #include <deb/CKKSTypes.hpp>
-#include <deb/Context.hpp>
 #include <deb/Encryptor.hpp>
 
 namespace evi {

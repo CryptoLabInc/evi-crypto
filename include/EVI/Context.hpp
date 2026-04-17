@@ -20,6 +20,7 @@
 #include "EVI/Enums.hpp"
 #include "EVI/Export.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>

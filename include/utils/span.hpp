@@ -26,6 +26,10 @@
 #include <functional>
 #include <vector>
 
+#ifdef _WIN32
+#include <malloc.h>
+#endif
+
 template <typename T, std::size_t Alignment>
 struct AlignedAllocator {
     using value_type = T;
@@ -37,14 +41,25 @@ struct AlignedAllocator {
 
     T *allocate(std::size_t n) {
         void *ptr = nullptr;
+#ifdef _WIN32
+        ptr = _aligned_malloc(n * sizeof(T), Alignment);
+        if (!ptr) {
+            throw std::bad_alloc();
+        }
+#else
         if (posix_memalign(&ptr, Alignment, n * sizeof(T)) != 0) {
             throw std::bad_alloc();
         }
+#endif
         return reinterpret_cast<T *>(ptr);
     }
 
     void deallocate(T *p, std::size_t) noexcept {
+#ifdef _WIN32
+        _aligned_free(p);
+#else
         free(p);
+#endif
     }
 
     template <typename U>

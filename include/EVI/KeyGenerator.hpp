@@ -21,6 +21,7 @@
 #include "EVI/Export.hpp"
 #include "EVI/KeyPack.hpp"
 #include "EVI/SecretKey.hpp"
+#include <cstdint>
 #include <iosfwd>
 #include <memory>
 

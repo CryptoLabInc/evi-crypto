@@ -34,9 +34,9 @@ namespace evi {
 namespace detail {
 
 KeyPackData::KeyPackData(const Context &context)
-    : context_(context), deb_enc_key(utils::getDebContext(context), deb::SWK_ENC),
-      deb_relin_key(utils::getDebContext(context), deb::SWK_MULT),
-      deb_mod_pack_key(utils::getDebContext(context), deb::SWK_MODPACK_SELF) {
+    : context_(context), deb_enc_key(utils::getDebPreset(context), deb::SWK_ENC),
+      deb_relin_key(utils::getDebPreset(context), deb::SWK_MULT),
+      deb_mod_pack_key(utils::getDebPreset(context), deb::SWK_MODPACK_SELF) {
     mod_pack_key->setSize(context->getPadRank() * DEGREE);
     enc_loaded_ = false;
     eval_loaded_ = false;
