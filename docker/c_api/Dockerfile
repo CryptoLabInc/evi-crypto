@@ -21,57 +21,34 @@ ARG UBUNTU_VERSION=22.04
 FROM ubuntu:${UBUNTU_VERSION} AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG TARGETARCH
 RUN set -eux; \
-    rm -f /etc/apt/sources.list.d/ubuntu.sources || true; \
-    # Choose mirror set based on architecture (arm64 uses ubuntu-ports)
-    if [ "${TARGETARCH:-amd64}" = "arm64" ]; then \
-        MIRROR_CANDIDATES="mirror.kakao.com/ubuntu-ports ports.ubuntu.com/ubuntu-ports"; \
-    else \
-        MIRROR_CANDIDATES="mirror.kakao.com/ubuntu archive.ubuntu.com/ubuntu"; \
-    fi; \
-    . /etc/os-release; CODENAME=${VERSION_CODENAME}; \
-    MIRROR_USED=""; \
-    for MIRROR_HOST in ${MIRROR_CANDIDATES}; do \
-      : > /etc/apt/sources.list; \
-      echo "deb http://${MIRROR_HOST} ${CODENAME} main restricted universe multiverse"           >> /etc/apt/sources.list; \
-      echo "deb http://${MIRROR_HOST} ${CODENAME}-updates main restricted universe multiverse"   >> /etc/apt/sources.list; \
-      echo "deb http://${MIRROR_HOST} ${CODENAME}-backports main restricted universe multiverse" >> /etc/apt/sources.list; \
-      echo "deb http://${MIRROR_HOST} ${CODENAME}-security main restricted universe multiverse"  >> /etc/apt/sources.list; \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-      for i in 1 2 3 4 5; do \
-        if apt-get update; then \
-          MIRROR_USED=${MIRROR_HOST}; \
-          break 2; \
-        fi; \
-        echo "apt-get update attempt $i failed on mirror ${MIRROR_HOST}"; \
-        rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-        sleep 3; \
-      done; \
-    done; \
-    if [ -z "${MIRROR_USED}" ]; then \
-      echo "All configured mirrors failed"; \
-      exit 1; \
-    fi; \
-    echo "Using apt mirror: ${MIRROR_USED}"; \
+    apt_ok=""; \
     for i in 1 2 3 4 5; do \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        cmake \
-        git \
-        ninja-build \
-        pkg-config \
-        python3 \
-        python3-pip \
-        python3-venv \
-        curl \
-        wget \
-        libssl-dev \
-        zlib1g-dev \
-      && break || { echo "apt-get install attempt $i failed"; rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; sleep 3; }; \
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+      if apt-get update && \
+         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+           build-essential \
+           ca-certificates \
+           cmake \
+           curl \
+           git \
+           libssl-dev \
+           ninja-build \
+           pkg-config \
+           python3 \
+           python3-pip \
+           python3-venv \
+           wget \
+           zlib1g-dev; then \
+        apt_ok=1; \
+        break; \
+      fi; \
+      echo "apt bootstrap attempt ${i} failed"; \
+      sleep 3; \
     done; \
-    rm -rf /var/lib/apt/lists/*
+    test -n "${apt_ok}"; \
+    command -v wget; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 ARG CONDA_DIR=/opt/conda
 ENV PATH=${CONDA_DIR}/bin:${PATH}

@@ -170,14 +170,29 @@ else()
 endif()
 set_property(TARGET ${PROJECT_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
 
+# Static builds: EVI_API becomes empty (no dllexport/dllimport).
+if(BUILD_AS_STATIC)
+  target_compile_definitions(${PROJECT_LIB_NAME} PUBLIC EVI_STATIC)
+endif()
+
+# On Windows, define EVI_BUILDING_LIB so that EVI_API resolves to
+# __declspec(dllexport) when compiling library sources (see Export.hpp).
+if(WIN32 AND NOT BUILD_AS_STATIC)
+  target_compile_definitions(${PROJECT_LIB_NAME} PRIVATE EVI_BUILDING_LIB)
+  # Export all symbols from the DLL so that internal helpers (getImpl etc.) used
+  # across translation units are visible without individual dllexport.
+  set_target_properties(${PROJECT_LIB_NAME}
+                        PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
+
+# HttpClient.cpp uses BSD sockets (Winsock2 on Windows).
+if(WIN32 AND BUILD_KEY_MANAGEMENT)
+  target_link_libraries(${PROJECT_LIB_NAME} PRIVATE ws2_32)
+endif()
+
 #
 target_compile_definitions(${PROJECT_LIB_NAME}
                            PUBLIC alignment_byte=${ALIGNMENT_BYTE})
-if(BUILD_AS_STATIC)
-  target_compile_definitions(${PROJECT_LIB_NAME} PUBLIC EVI_STATIC)
-else()
-  target_compile_definitions(${PROJECT_LIB_NAME} PRIVATE EVI_BUILDING_LIB)
-endif()
 
 # Core dependencies
 find_package(OpenSSL REQUIRED)

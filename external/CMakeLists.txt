@@ -34,10 +34,6 @@ set(DEB_PARAMETER_JSON
     "${CMAKE_CURRENT_SOURCE_DIR}/deb-param.json"
     CACHE STRING "" FORCE)
 set(DEB_MEMORY_ALIGN_SIZE_VALUE "${ALIGNMENT_BYTE}")
-if(MSVC)
-  # deb still uses std::aligned_alloc in one allocation path, which MSVC does
-  # not provide. Disable deb's explicit alignment there until upstream is fixed.
-  set(DEB_MEMORY_ALIGN_SIZE_VALUE 0)
 endif()
 set(DEB_MEMORY_ALIGN_SIZE
     "${DEB_MEMORY_ALIGN_SIZE_VALUE}"
@@ -49,7 +45,7 @@ cpmaddpackage(
   GITHUB_REPOSITORY
   CryptoLabInc/deb
   GIT_TAG
-  03241f43cfef63b4e0094e96ddb445e4ab59287b # deb 26.04.17 main (v0.3.1 + MinGW)
+  1b033edb63a335007039a52efab6acc59ab25a84 # deb 26.04.17 main (v0.3.1 + Win32)
   OPTIONS
   "DEB_BUILD_EXAMPLES OFF"
   "DEB_BUILD_TEST OFF"
