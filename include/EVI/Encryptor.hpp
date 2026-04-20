@@ -24,6 +24,7 @@
 #include "EVI/KeyPack.hpp"
 #include "EVI/Query.hpp"
 
+#include <cstdint>
 #include <istream>
 #include <memory>
 #include <optional>

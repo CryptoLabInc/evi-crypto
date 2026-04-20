@@ -25,13 +25,24 @@
 namespace evi {
 namespace detail {
 // NOLINTBEGIN(readability-identifier-naming)
-using u128 = unsigned __int128;
-using i128 = __int128;
 using u64 = uint64_t;
 using i64 = int64_t;
 using u32 = uint32_t;
 using i32 = int32_t;
 using u8 = uint8_t;
+#if defined(_MSC_VER) && !defined(__clang__)
+struct alignas(16) u128 {
+    u64 hi;
+    u64 lo;
+
+    constexpr u128() : hi(0), lo(0) {}
+    constexpr u128(u64 value) : hi(0), lo(value) {}
+    constexpr u128(u64 hi_value, u64 lo_value) : hi(hi_value), lo(lo_value) {}
+};
+#else
+using u128 = unsigned __int128;
+using i128 = __int128;
+#endif
 // NOLINTEND(readability-identifier-naming)
 
 #define U64C(x) UINT64_C(x)

@@ -105,7 +105,7 @@ void SecretKeyData::loadSecKey(std::istream &in) {
         for (u64 i = 0; i < DEGREE; ++i) {
             deb_sk_.coeffs()[i] = static_cast<int8_t>(sec_coeff_[i]);
         }
-        auto deb_preset = utils::getDebContext(preset_buf)->get_preset();
+        auto deb_preset = utils::getDebPreset(preset_buf);
         deb_sk_ = deb::SecretKeyGenerator::GenSecretKeyFromCoeff(deb_preset, deb_sk_.coeffs());
         std::memcpy(sec_key_q_.data(), deb_sk_[0][0].data(), detail::U64_DEGREE);
         std::memcpy(sec_key_p_.data(), deb_sk_[0][1].data(), detail::U64_DEGREE);

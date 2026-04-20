@@ -20,7 +20,9 @@
 #include "EVI/Enums.hpp"
 #include "EVI/Export.hpp"
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace evi {
@@ -31,7 +33,7 @@ constexpr int AES_GCM_IV_SIZE = 12;
 constexpr int AES_GCM_TAG_SIZE = 16;
 
 namespace detail {
-class SealInfo;
+struct SealInfo;
 }
 
 /**

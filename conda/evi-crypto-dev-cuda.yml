@@ -5,8 +5,6 @@ channels:
 dependencies:
   - cuda-minimal-build
   - libcurand-dev
-  - c-compiler=1.5.1
-  - cxx-compiler=1.5.1
   - clang-tools=14
   - clang=14
   - clangxx=14

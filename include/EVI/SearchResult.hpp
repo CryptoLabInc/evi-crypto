@@ -18,6 +18,7 @@
 
 #pragma once
 #include "EVI/Export.hpp"
+#include <cstdint>
 #include <istream>
 #include <memory>
 #include <optional>

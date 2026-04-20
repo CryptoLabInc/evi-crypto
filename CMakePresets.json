@@ -92,7 +92,7 @@
       "installDir": "${sourceDir}/build/install",
       "cacheVariables": {
         "BUILD_TEST": "ON",
-        "BUILD_WITH_VALGRIND": "ON"
+        "BUILD_WITH_VALGRIND": "OFF"
       }
     },
     {

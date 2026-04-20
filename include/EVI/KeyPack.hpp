@@ -19,7 +19,9 @@
 #pragma once
 #include "EVI/Context.hpp"
 #include "EVI/Export.hpp"
+#include <iosfwd>
 #include <memory>
+#include <string>
 
 namespace evi {
 

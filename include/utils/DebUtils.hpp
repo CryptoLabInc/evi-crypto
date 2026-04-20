@@ -22,7 +22,6 @@
 #include "EVI/impl/ContextImpl.hpp"
 
 #include <deb/CKKSTypes.hpp>
-#include <deb/Context.hpp>
 
 namespace evi {
 namespace detail {
@@ -30,9 +29,7 @@ namespace utils {
 
 deb::Preset getDebPreset(const detail::Context &context);
 
-deb::Context getDebContext(const detail::Context &context);
-
-deb::Context getDebContext(const std::string &preset);
+deb::Preset getDebPreset(const std::string &preset);
 
 std::optional<deb::RNGSeed> convertDebSeed(const std::optional<std::vector<u8>> &seed);
 
