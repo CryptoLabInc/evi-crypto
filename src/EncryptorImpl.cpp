@@ -203,6 +203,10 @@ Query EncryptorImpl<M>::encrypt(const span<float> msg, const MultiSecretKey &sec
         double delta = scale.value_or(std::pow(2.0, context_->getParam()->getScaleFactor()));
         sampler_.sampleGaussian(ctxt_b_q);
         for (u64 i = 0; i < item_per_ciphertext; ++i) {
+            // RMP currently uses 51-bit PRIME_Q and 55-bit PRIME_P, so this rounded
+            // coefficient stays within int64_t before converting to unsigned magnitude.
+            // If a future preset moves to 59-bit-or-larger primes, this path should
+            // be revisited and promoted back to i128-based handling.
             i64 temp = static_cast<i64>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
             bool is_positive = temp >= 0;
             u64 abs_temp = is_positive ? static_cast<u64>(temp) : (static_cast<u64>(~static_cast<u64>(temp)) + 1);

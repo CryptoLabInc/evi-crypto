@@ -39,7 +39,6 @@ struct alignas(16) u128 {
     constexpr u128(u64 value) : hi(0), lo(value) {}
     constexpr u128(u64 hi_value, u64 lo_value) : hi(hi_value), lo(lo_value) {}
 };
-using i128 = i64;
 #else
 using u128 = unsigned __int128;
 using i128 = __int128;
