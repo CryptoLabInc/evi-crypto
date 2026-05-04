@@ -531,7 +531,7 @@ SecretKey MultiKeyGenerator::generateKeys() {
 
 SecretKey MultiKeyGenerator::generateKeys(std::ostream &os) {
     SecretKey sec_key = generateKeys();
-    utils::serializeKeyFiles(store_path_, os);
+    utils::serializeKeyFiles(store_path_.string(), os);
     std::filesystem::remove_all(store_path_);
     return sec_key;
 }
