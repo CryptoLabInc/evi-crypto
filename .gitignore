@@ -1,6 +1,9 @@
 keys/
+kms_audit**.jsonl
 bin/
 build*/
+!docker/build/
+_codeql_*/
 dist/
 cmake/launch-cxx
 .vscode
@@ -16,3 +19,4 @@ Testing/
 **/.pyo
 **/.pyd
 **/.pydc
+envector-python-sdk-private

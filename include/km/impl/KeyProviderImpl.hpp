@@ -9,8 +9,7 @@
 #include "EVI/SealInfo.hpp"
 #include "EVI/SecretKey.hpp"
 #include "km/KeyEnvelope.hpp"
-#include "km/KeyProviderInterface.hpp"
-#include "km/ProviderMeta.hpp"
+#include "utils/SealInfo.hpp"
 
 #include "nlohmann/json.hpp"
 
@@ -22,27 +21,30 @@
 namespace evi {
 namespace detail {
 
-class LocalKeyProvider : public KeyProviderInterface {
+class KeyProvider {
 public:
-    explicit LocalKeyProvider(LocalProviderMeta provider_meta);
-    ~LocalKeyProvider() override = default;
+    KeyProvider() = default;
+    ~KeyProvider() = default;
 
-    evi::ProviderEnvelope encapSecKey(const std::string &key_file_path) override;
-    evi::ProviderEnvelope encapEncKey(const std::string &key_file_path) override;
-    evi::ProviderEnvelope encapEvalKey(const std::string &key_file_path) override;
-    evi::ProviderEnvelope encapSecKey(std::istream &key_stream) override;
-    evi::ProviderEnvelope encapEncKey(std::istream &key_stream) override;
-    evi::ProviderEnvelope encapEvalKey(std::istream &key_stream) override;
+    nlohmann::ordered_json encapEncKey(const std::string &key_id, const std::string &key_file_path);
+    nlohmann::ordered_json encapEvalKey(const std::string &key_id, const std::string &key_file_path);
+    nlohmann::ordered_json encapSecKey(const std::string &key_id, std::istream &key_stream,
+                                       const SealInfo &s_info = SealInfo(SealMode::NONE));
+    nlohmann::ordered_json encapEncKey(const std::string &key_id, std::istream &key_stream);
+    nlohmann::ordered_json encapEvalKey(const std::string &key_id, std::istream &key_stream);
+    nlohmann::ordered_json encapMetadataKey(const std::string &key_id, std::istream &key_stream,
+                                            const SealInfo &s_info = SealInfo(SealMode::NONE));
 
-    void decapSecKey(const std::string &key_file_path, const std::string &out_file_path) override;
-    void decapEncKey(const std::string &key_file_path, const std::string &out_file_path) override;
-    void decapEvalKey(const std::string &key_file_path, const std::string &out_file_path) override;
-    void decapSecKey(std::istream &key_stream, std::ostream &out_stream) override;
-    void decapEncKey(std::istream &key_stream, std::ostream &out_stream) override;
-    void decapEvalKey(std::istream &key_stream, std::ostream &out_stream) override;
-
-private:
-    LocalProviderMeta provider_meta_;
+    void decapSecKey(const std::string &key_file_path, const std::string &out_file_path, const SealInfo &s_info);
+    void decapEncKey(const std::string &key_file_path, const std::string &out_file_path);
+    void decapEvalKey(const std::string &key_file_path, const std::string &out_file_path);
+    void decapMetadataKey(const std::string &key_file_path, const std::string &out_file_path);
+    void decapMetadataKey(const std::string &key_file_path, const std::string &out_file_path, const SealInfo &s_info);
+    void decapSecKey(std::istream &key_stream, std::ostream &out_stream, const SealInfo &s_info);
+    void decapEncKey(std::istream &key_stream, std::ostream &out_stream);
+    void decapEvalKey(std::istream &key_stream, std::ostream &out_stream);
+    void decapMetadataKey(std::istream &key_stream, std::ostream &out_stream);
+    void decapMetadataKey(std::istream &key_stream, std::ostream &out_stream, const SealInfo &s_info);
 };
 
 } // namespace detail

@@ -26,13 +26,54 @@
   {
     "NAME": "EVI_IP1",
     "PARENT": "EVI_IP0",
+    "NUM_QP": 1,
+    "ENC_LEVEL": 1,
+    "GADGET_RANK": 2,
     "PRIMES": [
-      1152921504606830593,
-      1032193
+      17179754497,
+      17179672577,
+      274877562881
     ],
     "SCALE_FACTORS": [
       34.0,
-      24.0
+      34.0,
+      38.0
+    ]
+  },
+  {
+    "NAME": "EVI_IP2",
+    "PARENT": "EVI_IP0",
+    "NUM_QP": 1,
+    "NUM_TP": 1,
+    "ENC_LEVEL": 1,
+    "GADGET_RANK": 2,
+    "PRIMES": [
+      4294828033,
+      4294729729,
+      4398046486529
+    ],
+    "SCALE_FACTORS": [
+      32.0,
+      32.0,
+      42.0
+    ]
+  },
+  {
+    "NAME": "EVI_IP3",
+    "PARENT": "EVI_IP0",
+    "NUM_QP": 1,
+    "NUM_TP": 1,
+    "ENC_LEVEL": 1,
+    "GADGET_RANK": 2,
+    "PRIMES": [
+      1073692673,
+      1073668097,
+      70368743669761
+    ],
+    "SCALE_FACTORS": [
+      30.0,
+      30.0,
+      46.0
     ]
   },
   {
@@ -46,5 +87,23 @@
       25.0,
       25.0
     ]
+  },
+  {
+    "NAME": "HEMB44Q36T48L0",
+    "PARENT": "EVI_IP0",
+    "GADGET_RANK": 1,
+    "PRIMES": [
+      4503599627124737,
+      18014398508400641
+    ],
+    "SCALE_FACTORS": [
+      52.0,
+      54.0
+    ]
+  },
+  {
+    "NAME": "EVI_IP1_MS4",
+    "PARENT": "EVI_IP1",
+    "NUM_SECRET": 4
   }
 ]

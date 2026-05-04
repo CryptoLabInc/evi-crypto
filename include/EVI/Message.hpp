@@ -18,7 +18,6 @@
 
 #pragma once
 #include "EVI/Export.hpp"
-#include <cstddef>
 #include <memory>
 
 namespace evi {

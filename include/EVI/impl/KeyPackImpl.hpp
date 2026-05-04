@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,28 @@ namespace evi {
 namespace fs = std::filesystem;
 
 namespace detail {
+
+class KeySwitcher;
+
+// Bitmask for selective eval key loading. Skipped components are read past but
+// not stored — this lets compute nodes load only the backward L0 keys without
+// allocating memory for huge transpose / forward key tables.
+enum class EvalKeyComponents : uint32_t {
+    Relin = 1u << 0,
+    ModPack = 1u << 1,
+    Transpose = 1u << 2,  // key_switching_key (DEGREE switch keys for MM/MMS)
+    SharedAFwd = 1u << 3, // legacy shared-A + deb QPR forward + off-diagonal
+    SharedABwd = 1u << 4, // backward L0 keys (post-PCMM key-switch)
+    All = Relin | ModPack | Transpose | SharedAFwd | SharedABwd,
+};
+
+inline constexpr EvalKeyComponents operator|(EvalKeyComponents a, EvalKeyComponents b) {
+    return static_cast<EvalKeyComponents>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+
+inline constexpr bool hasComponent(EvalKeyComponents mask, EvalKeyComponents component) {
+    return (static_cast<uint32_t>(mask) & static_cast<uint32_t>(component)) != 0;
+}
 
 class IKeyPack {
 public:
@@ -78,6 +101,11 @@ public:
     void loadEvalKeyFile(const std::string &path) override;
     void loadEvalKeyBuffer(std::istream &is) override;
 
+    // Selective loading — skips components not in the mask. Skipped data is
+    // advanced past in the stream but not allocated/populated.
+    void loadEvalKeyFile(const std::string &path, EvalKeyComponents components);
+    void loadEvalKeyBuffer(std::istream &is, EvalKeyComponents components);
+
     void serialize(std::ostream &os) const;
     void deserialize(std::istream &is);
 
@@ -93,8 +121,11 @@ public:
 
     void save(const std::string &path);
 
+    std::shared_ptr<KeySwitcher> getKeySwitcher(evi::DeviceType device_type = evi::DeviceType::CPU,
+                                                bool keyload = true);
+
     FixedKeyType enckey;
-    FixedKeyType relin_key;
+    VariadicKeyType relin_key;
     deb::SwitchKey deb_enc_key;
     deb::SwitchKey deb_relin_key;
 
@@ -103,9 +134,23 @@ public:
     VariadicKeyType cc_shared_a_mod_pack_key;
     VariadicKeyType switch_key;
     VariadicKeyType shared_a_key;
+    polyvec shared_a_key_r_a; // R-channel A-parts for QPR FmtSwitch
+    polyvec shared_a_key_r_b; // R-channel B-parts for QPR FmtSwitch
+    u64 r_prime_ = 0;         // R prime value for QPR modDown
     VariadicKeyType reverse_switch_key;
+    std::vector<VariadicKeyType> key_switching_key;
     std::vector<VariadicKeyType> additive_shared_a_key;
     deb::SwitchKey deb_mod_pack_key;
+    deb::SwitchKey deb_shared_a_fwd_key;                // legacy single key
+    deb::SwitchKey deb_shared_a_bwd_key;                // legacy single key
+    std::vector<deb::SwitchKey> shared_a_fwd_keys;      // nss diagonal QPR keys (s→s_j)
+    std::vector<deb::SwitchKey> shared_a_off_diag_keys; // nss*nss off-diagonal bx
+
+    // Backward L0 keys for post-PCMM key-switch (s_j → s), CRT-consistent
+    struct BackwardL0Key {
+        polyvec ax_q, ax_p, bx_q, bx_p; // DEGREE each, NTT domain
+    };
+    std::vector<BackwardL0Key> shared_a_bwd_l0_keys; // nss keys
 
     int num_shared_secret;
 
@@ -114,8 +159,14 @@ public:
     bool cc_shared_a_mod_pack_loaded_;
     bool enc_loaded_;
     bool eval_loaded_;
+    bool keyswitcher_cpu_loaded_;
+    bool keyswitcher_gpu_loaded_;
+    std::shared_ptr<KeySwitcher> keyswitcher_cpu_;
+    std::shared_ptr<KeySwitcher> keyswitcher_gpu_;
 
 private:
+    mutable std::mutex keyswitcher_mtx_;
+
     const evi::detail::Context context_;
 };
 

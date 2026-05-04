@@ -25,7 +25,38 @@ using namespace evi::c_api::detail;
 extern "C" {
 
 void evi_secret_key_destroy(evi_secret_key_t *seckey) {
+    if (!seckey) {
+        return;
+    }
+    seckey->impl.reset();
     delete seckey;
+}
+
+evi_status_t evi_secret_key_reset(evi_secret_key_t *seckey) {
+    if (!seckey) {
+        return set_error(EVI_STATUS_INVALID_ARGUMENT, "null argument");
+    }
+    return invoke_and_catch([&]() {
+        seckey->impl.reset();
+    });
+}
+
+evi_status_t evi_secret_key_open_access(evi_secret_key_t *seckey) {
+    if (!seckey) {
+        return set_error(EVI_STATUS_INVALID_ARGUMENT, "null argument");
+    }
+    return invoke_and_catch([&]() {
+        seckey->impl.openAccess();
+    });
+}
+
+evi_status_t evi_secret_key_close_access(evi_secret_key_t *seckey) {
+    if (!seckey) {
+        return set_error(EVI_STATUS_INVALID_ARGUMENT, "null argument");
+    }
+    return invoke_and_catch([&]() {
+        seckey->impl.closeAccess();
+    });
 }
 
 evi_status_t evi_secret_key_create(const evi_context_t *context, evi_secret_key_t **out_key) {

@@ -40,14 +40,21 @@ class Decryptor;
  * A `Decryptor` provides functions to convert encrypted data back into
  * plaintext `Message` objects. It supports decrypting individual queries,
  * ciphertexts, and search results.
+ *
+ * @par Thread Safety
+ * **NOT thread-safe.** Concurrent calls to decrypt() on the same instance
+ * produce data races (deb library mutates process-global OpenMP thread count
+ * via omp_set_num_threads). Use one Decryptor per thread/goroutine, or
+ * serialize access with an external mutex. See GAP-014 in
+ * docs/specs/crypto/decryptor-lifecycle.md for details.
  */
 class EVI_API Decryptor {
 public:
-    /// @brief Empty handle; initialize with makeDecryptor() before use.
+    /// @brief Empty handle; initialize with `makeDecryptor()` before use.
     Decryptor() : impl_(nullptr) {}
 
     /**
-     * @brief Constructs a Decryptor with an internal implementation.
+     * @brief Constructs a `Decryptor` with an internal implementation.
      * @param impl Shared pointer to the internal `detail::Decryptor` object.
      */
     explicit Decryptor(std::shared_ptr<detail::Decryptor> impl) noexcept;

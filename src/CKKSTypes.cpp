@@ -17,10 +17,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "EVI/impl/CKKSTypes.hpp"
+#include "EVI/impl/Bitpack.hpp"
 #include "EVI/impl/Const.hpp"
 #include "utils/Exceptions.hpp"
+#include "utils/Serialization.hpp"
 #include <cassert>
 #include <cstring>
+#include <vector>
 
 namespace evi {
 
@@ -94,6 +97,7 @@ SingleBlock<T>::SingleBlock(std::vector<u8> &buf) : dtype_(T) {
 
 template <DataType T>
 void SingleBlock<T>::serializeTo(std::ostream &stream) const {
+    serialization::writeHeader(stream, serialization::kVersionV1);
     stream.write(reinterpret_cast<const char *>(&level_), sizeof(int));
     stream.write(reinterpret_cast<const char *>(&n), sizeof(u64));
     stream.write(reinterpret_cast<const char *>(&dim), sizeof(u64));
@@ -102,43 +106,88 @@ void SingleBlock<T>::serializeTo(std::ostream &stream) const {
     stream.write(reinterpret_cast<const char *>(&scale_bit), sizeof(u64));
     auto enc_type = static_cast<std::underlying_type_t<evi::EncodeType>>(encode_type);
     stream.write(reinterpret_cast<const char *>(&enc_type), sizeof(enc_type));
+    const u8 q_bits = prime_q_bits;
+    const u8 p_bits = (level_ ? prime_p_bits : 0);
+    if (!q_bits || (level_ && !p_bits)) {
+        throw evi::InvalidInputError("Missing prime bit metadata for serialization");
+    }
+    stream.write(reinterpret_cast<const char *>(&q_bits), sizeof(q_bits));
+    stream.write(reinterpret_cast<const char *>(&p_bits), sizeof(p_bits));
     if constexpr (T == DataType::CIPHER) {
-        stream.write(reinterpret_cast<const char *>(a_q_.data()), U64_DEGREE);
-        stream.write(reinterpret_cast<const char *>(b_q_.data()), U64_DEGREE);
+        serialization::writePackedU64(stream, a_q_.data(), DEGREE, q_bits);
+        serialization::writePackedU64(stream, b_q_.data(), DEGREE, q_bits);
         if (level_) {
-            stream.write(reinterpret_cast<const char *>(a_p_.data()), U64_DEGREE);
-            stream.write(reinterpret_cast<const char *>(b_p_.data()), U64_DEGREE);
+            serialization::writePackedU64(stream, a_p_.data(), DEGREE, p_bits);
+            serialization::writePackedU64(stream, b_p_.data(), DEGREE, p_bits);
         }
     } else {
-        stream.write(reinterpret_cast<const char *>(b_q_.data()), U64_DEGREE);
+        serialization::writePackedU64(stream, b_q_.data(), DEGREE, q_bits);
         if (level_) {
-            stream.write(reinterpret_cast<const char *>(b_p_.data()), U64_DEGREE);
+            serialization::writePackedU64(stream, b_p_.data(), DEGREE, p_bits);
         }
     }
 }
 
 template <DataType T>
 void SingleBlock<T>::deserializeFrom(std::istream &stream) {
-    stream.read(reinterpret_cast<char *>(&level_), sizeof(int));
-    stream.read(reinterpret_cast<char *>(&n), sizeof(u64));
-    stream.read(reinterpret_cast<char *>(&dim), sizeof(u64));
-    stream.read(reinterpret_cast<char *>(&degree), sizeof(u64));
-    stream.read(reinterpret_cast<char *>(&show_dim), sizeof(u64));
-    stream.read(reinterpret_cast<char *>(&scale_bit), sizeof(u64));
-    std::underlying_type_t<evi::EncodeType> enc_type_raw = 0;
-    stream.read(reinterpret_cast<char *>(&enc_type_raw), sizeof(enc_type_raw));
-    encode_type = static_cast<evi::EncodeType>(enc_type_raw);
-    if constexpr (T == DataType::CIPHER) {
-        stream.read(reinterpret_cast<char *>(a_q_.data()), U64_DEGREE);
-        stream.read(reinterpret_cast<char *>(b_q_.data()), U64_DEGREE);
-        if (level_) {
-            stream.read(reinterpret_cast<char *>(a_p_.data()), U64_DEGREE);
-            stream.read(reinterpret_cast<char *>(b_p_.data()), U64_DEGREE);
+    auto header = serialization::readHeader(stream);
+    if (header.has_header) {
+        if (header.version != serialization::kVersionV1) {
+            throw evi::NotSupportedError("Unsupported SingleBlock serialization version");
+        }
+        stream.read(reinterpret_cast<char *>(&level_), sizeof(int));
+        stream.read(reinterpret_cast<char *>(&n), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&dim), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&degree), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&show_dim), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&scale_bit), sizeof(u64));
+        std::underlying_type_t<evi::EncodeType> enc_type_raw = 0;
+        stream.read(reinterpret_cast<char *>(&enc_type_raw), sizeof(enc_type_raw));
+        encode_type = static_cast<evi::EncodeType>(enc_type_raw);
+        stream.read(reinterpret_cast<char *>(&prime_q_bits), sizeof(prime_q_bits));
+        stream.read(reinterpret_cast<char *>(&prime_p_bits), sizeof(prime_p_bits));
+    } else {
+        stream.read(reinterpret_cast<char *>(&level_), sizeof(int));
+        stream.read(reinterpret_cast<char *>(&n), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&dim), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&degree), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&show_dim), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&scale_bit), sizeof(u64));
+        std::underlying_type_t<evi::EncodeType> enc_type_raw = 0;
+        stream.read(reinterpret_cast<char *>(&enc_type_raw), sizeof(enc_type_raw));
+        encode_type = static_cast<evi::EncodeType>(enc_type_raw);
+        prime_q_bits = 0;
+        prime_p_bits = 0;
+    }
+    if (header.has_header) {
+        const u8 q_bits = prime_q_bits;
+        const u8 p_bits = (level_ ? prime_p_bits : 0);
+        if constexpr (T == DataType::CIPHER) {
+            serialization::readPackedU64(stream, a_q_.data(), DEGREE, q_bits);
+            serialization::readPackedU64(stream, b_q_.data(), DEGREE, q_bits);
+            if (level_) {
+                serialization::readPackedU64(stream, a_p_.data(), DEGREE, p_bits);
+                serialization::readPackedU64(stream, b_p_.data(), DEGREE, p_bits);
+            }
+        } else {
+            serialization::readPackedU64(stream, b_q_.data(), DEGREE, q_bits);
+            if (level_) {
+                serialization::readPackedU64(stream, b_p_.data(), DEGREE, p_bits);
+            }
         }
     } else {
-        stream.read(reinterpret_cast<char *>(b_q_.data()), U64_DEGREE);
-        if (level_) {
-            stream.read(reinterpret_cast<char *>(b_p_.data()), U64_DEGREE);
+        if constexpr (T == DataType::CIPHER) {
+            stream.read(reinterpret_cast<char *>(a_q_.data()), U64_DEGREE);
+            stream.read(reinterpret_cast<char *>(b_q_.data()), U64_DEGREE);
+            if (level_) {
+                stream.read(reinterpret_cast<char *>(a_p_.data()), U64_DEGREE);
+                stream.read(reinterpret_cast<char *>(b_p_.data()), U64_DEGREE);
+            }
+        } else {
+            stream.read(reinterpret_cast<char *>(b_q_.data()), U64_DEGREE);
+            if (level_) {
+                stream.read(reinterpret_cast<char *>(b_p_.data()), U64_DEGREE);
+            }
         }
     }
 }
@@ -399,21 +448,36 @@ Matrix<T>::Matrix(polyvec a_q, polyvec a_p, polyvec b_q, polyvec b_p)
 
 template <DataType T>
 void Matrix<T>::serializeTo(std::ostream &stream) const {
+    // V2 adds preset (u8) after prime_p_bits. Readers dispatch on
+    // version (V1 fallback treats preset as RUNTIME).
+    serialization::writeHeader(stream, serialization::kVersionV2);
     stream.write(reinterpret_cast<const char *>(&level_), sizeof(int));
     stream.write(reinterpret_cast<const char *>(&n), sizeof(u64));
     stream.write(reinterpret_cast<const char *>(&dim), sizeof(u64));
     stream.write(reinterpret_cast<const char *>(&degree), sizeof(u64));
+    const u8 q_bits = prime_q_bits;
+    const u8 p_bits = (level_ ? prime_p_bits : 0);
+    if (!q_bits || (level_ && !p_bits)) {
+        throw evi::InvalidInputError("Missing prime bit metadata for serialization");
+    }
+    stream.write(reinterpret_cast<const char *>(&q_bits), sizeof(q_bits));
+    stream.write(reinterpret_cast<const char *>(&p_bits), sizeof(p_bits));
+    // V2 field: preset so DecryptorMM can detect base-converted results
+    // after wire round-trip. RUNTIME means "same as context" (default).
+    const u8 res_preset_byte = static_cast<u8>(preset);
+    stream.write(reinterpret_cast<const char *>(&res_preset_byte), sizeof(res_preset_byte));
+    const std::size_t elem_count = static_cast<std::size_t>((n + degree - 1) / degree) * DEGREE;
     if constexpr (T == DataType::CIPHER) {
-        stream.write(reinterpret_cast<const char *>(a_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
-        stream.write(reinterpret_cast<const char *>(b_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
+        serialization::writePackedU64(stream, a_q_.data(), elem_count, q_bits);
+        serialization::writePackedU64(stream, b_q_.data(), elem_count, q_bits);
         if (level_) {
-            stream.write(reinterpret_cast<const char *>(a_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
-            stream.write(reinterpret_cast<const char *>(b_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
+            serialization::writePackedU64(stream, a_p_.data(), elem_count, p_bits);
+            serialization::writePackedU64(stream, b_p_.data(), elem_count, p_bits);
         }
     } else {
-        stream.write(reinterpret_cast<const char *>(b_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
+        serialization::writePackedU64(stream, b_q_.data(), elem_count, q_bits);
         if (level_) {
-            stream.write(reinterpret_cast<const char *>(b_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
+            serialization::writePackedU64(stream, b_p_.data(), elem_count, p_bits);
         }
     }
 }
@@ -428,22 +492,64 @@ void Matrix<T>::serializeTo(std::vector<u8> &buf) const {
 
 template <DataType T>
 void Matrix<T>::deserializeFrom(std::istream &stream) {
-    stream.read(reinterpret_cast<char *>(&level_), sizeof(int));
-    stream.read(reinterpret_cast<char *>(&n), sizeof(u64));
-    stream.read(reinterpret_cast<char *>(&dim), sizeof(u64));
-    stream.read(reinterpret_cast<char *>(&degree), sizeof(u64));
-    setSize((n + degree - 1) / degree * U64_DEGREE);
-    if constexpr (T == DataType::CIPHER) {
-        stream.read(reinterpret_cast<char *>(a_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
-        stream.read(reinterpret_cast<char *>(b_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
-        if (level_) {
-            stream.read(reinterpret_cast<char *>(a_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
-            stream.read(reinterpret_cast<char *>(b_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
+    auto header = serialization::readHeader(stream);
+    if (header.has_header) {
+        if (header.version != serialization::kVersionV1 && header.version != serialization::kVersionV2) {
+            throw evi::NotSupportedError("Unsupported Matrix serialization version");
+        }
+        stream.read(reinterpret_cast<char *>(&level_), sizeof(int));
+        stream.read(reinterpret_cast<char *>(&n), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&dim), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&degree), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&prime_q_bits), sizeof(prime_q_bits));
+        stream.read(reinterpret_cast<char *>(&prime_p_bits), sizeof(prime_p_bits));
+        if (header.version >= serialization::kVersionV2) {
+            u8 res_preset_byte = 0;
+            stream.read(reinterpret_cast<char *>(&res_preset_byte), sizeof(res_preset_byte));
+            preset = static_cast<ParameterPreset>(res_preset_byte);
+        } else {
+            // V1 predates the base-conversion discriminator — no-op default.
+            preset = ParameterPreset::RUNTIME;
         }
     } else {
-        stream.read(reinterpret_cast<char *>(b_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
-        if (level_) {
-            stream.read(reinterpret_cast<char *>(b_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
+        stream.read(reinterpret_cast<char *>(&level_), sizeof(int));
+        stream.read(reinterpret_cast<char *>(&n), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&dim), sizeof(u64));
+        stream.read(reinterpret_cast<char *>(&degree), sizeof(u64));
+        prime_q_bits = 0;
+        prime_p_bits = 0;
+    }
+    const std::size_t elem_count = static_cast<std::size_t>((n + degree - 1) / degree) * DEGREE;
+    setSize((n + degree - 1) / degree * U64_DEGREE);
+    if (header.has_header) {
+        const u8 q_bits = prime_q_bits;
+        const u8 p_bits = (level_ ? prime_p_bits : 0);
+        if constexpr (T == DataType::CIPHER) {
+            serialization::readPackedU64(stream, a_q_.data(), elem_count, q_bits);
+            serialization::readPackedU64(stream, b_q_.data(), elem_count, q_bits);
+            if (level_) {
+                serialization::readPackedU64(stream, a_p_.data(), elem_count, p_bits);
+                serialization::readPackedU64(stream, b_p_.data(), elem_count, p_bits);
+            }
+        } else {
+            serialization::readPackedU64(stream, b_q_.data(), elem_count, q_bits);
+            if (level_) {
+                serialization::readPackedU64(stream, b_p_.data(), elem_count, p_bits);
+            }
+        }
+    } else {
+        if constexpr (T == DataType::CIPHER) {
+            stream.read(reinterpret_cast<char *>(a_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
+            stream.read(reinterpret_cast<char *>(b_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
+            if (level_) {
+                stream.read(reinterpret_cast<char *>(a_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
+                stream.read(reinterpret_cast<char *>(b_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
+            }
+        } else {
+            stream.read(reinterpret_cast<char *>(b_q_.data()), (n + degree - 1) / degree * U64_DEGREE);
+            if (level_) {
+                stream.read(reinterpret_cast<char *>(b_p_.data()), (n + degree - 1) / degree * U64_DEGREE);
+            }
         }
     }
 }

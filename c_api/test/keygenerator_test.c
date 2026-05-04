@@ -64,6 +64,11 @@ void test_keygenerator_basic(void) {
     snprintf(eval_key_path, sizeof(eval_key_path), "%s/%s", kKeypackDir, kEvalKeyFile);
     TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_keypack_save_enc_key(pack, enc_key_path));
     TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_keypack_save_eval_key(pack, eval_key_path));
+    TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_secret_key_open_access(secret));
+    TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_secret_key_close_access(secret));
+    TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_secret_key_reset(secret));
+    TEST_ASSERT_EQUAL(EVI_STATUS_RUNTIME_ERROR, evi_secret_key_open_access(secret));
+    TEST_ASSERT_EQUAL(EVI_STATUS_RUNTIME_ERROR, evi_secret_key_close_access(secret));
 
     evi_secret_key_destroy(secret);
     evi_keygenerator_destroy(keygen);
@@ -99,6 +104,11 @@ void test_multikeygenerator_with_seal_info(void) {
     evi_secret_key_t *secret = NULL;
     TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_multikeygenerator_generate_keys(multi, &secret));
     TEST_ASSERT_NOT_NULL(secret);
+    TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_secret_key_open_access(secret));
+    TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_secret_key_close_access(secret));
+    TEST_ASSERT_EQUAL(EVI_STATUS_SUCCESS, evi_secret_key_reset(secret));
+    TEST_ASSERT_EQUAL(EVI_STATUS_RUNTIME_ERROR, evi_secret_key_open_access(secret));
+    TEST_ASSERT_EQUAL(EVI_STATUS_RUNTIME_ERROR, evi_secret_key_close_access(secret));
 
     evi_secret_key_destroy(secret);
     evi_multikeygenerator_destroy(multi);

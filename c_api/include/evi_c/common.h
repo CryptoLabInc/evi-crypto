@@ -42,7 +42,8 @@ typedef enum evi_parameter_preset {
     EVI_PARAMETER_PRESET_QF2 = 3,
     EVI_PARAMETER_PRESET_QF3 = 4,
     EVI_PARAMETER_PRESET_IP0 = 5,
-    EVI_PARAMETER_PRESET_IP1 = 6
+    EVI_PARAMETER_PRESET_IP1 = 6,
+    EVI_PARAMETER_PRESET_IP2 = 7
 } evi_parameter_preset_t;
 
 typedef enum evi_eval_mode {
@@ -51,7 +52,10 @@ typedef enum evi_eval_mode {
     EVI_EVAL_MODE_RMS = 1,
     EVI_EVAL_MODE_MS = 2,
     EVI_EVAL_MODE_FLAT = 3,
-    EVI_EVAL_MODE_MM = 4
+    EVI_EVAL_MODE_MM = 4,
+    EVI_EVAL_MODE_MMS = 5,
+    EVI_EVAL_MODE_MM32 = 6,
+    EVI_EVAL_MODE_MMS32 = 7
 } evi_eval_mode_t;
 
 typedef enum evi_device_type {

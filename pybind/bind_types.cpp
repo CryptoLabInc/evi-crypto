@@ -43,6 +43,8 @@ void bind_types(py::module_ &m) {
         .value("QF3", ParameterPreset::QF3)
         .value("IP0", ParameterPreset::IP0)
         .value("IP1", ParameterPreset::IP1)
+        .value("IP2", ParameterPreset::IP2)
+        .value("IP3", ParameterPreset::IP3)
         .export_values();
 
     py::enum_<evi::SealMode>(m, "SealMode")
@@ -53,9 +55,13 @@ void bind_types(py::module_ &m) {
     py::enum_<EvalMode>(m, "EvalMode")
         .value("RMP", EvalMode::RMP)
         .value("MM", EvalMode::MM)
+        .value("MMS", EvalMode::MMS)
+        .value("MM32", EvalMode::MM32)
+        .value("MMS32", EvalMode::MMS32)
         .value("RMS", EvalMode::RMS)
         .value("MS", EvalMode::MS)
         .value("FLAT", EvalMode::FLAT)
+        .value("SINGLE", EvalMode::SINGLE)
         .export_values();
 
     py::enum_<DeviceType>(m, "DeviceType")

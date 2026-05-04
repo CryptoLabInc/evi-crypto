@@ -41,8 +41,8 @@ public:
 
     virtual void setSize(const int size, std::optional<int> = std::nullopt) = 0;
 
-    virtual DataType &getDataType() = 0;
-    virtual int &getLevel() = 0;
+    virtual DataType getDataType() const = 0;
+    virtual int getLevel() const = 0;
 };
 
 template <DataType T>
@@ -65,10 +65,10 @@ public:
     void deserializeFrom(std::istream &stream) override;
 
     void setSize(const int size, std::optional<int> = std::nullopt) override;
-    DataType &getDataType() override {
+    DataType getDataType() const override {
         return dtype;
     }
-    int &getLevel() override {
+    int getLevel() const override {
         return level_;
     }
 

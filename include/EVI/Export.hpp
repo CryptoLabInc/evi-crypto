@@ -18,9 +18,9 @@
 
 #pragma once
 
-#if defined(EVI_STATIC)
-#define EVI_API
-#elif defined(_WIN32) || defined(__CYGWIN__)
+/* If building static, make EVI_API empty. You can set EVI_STATIC from CMake if needed. */
+
+#if defined(_WIN32) || defined(__CYGWIN__)
 #if defined(EVI_BUILDING_LIB)
 #define EVI_API __declspec(dllexport)
 #else

@@ -18,17 +18,21 @@
 
 #include "EVI/impl/EncryptorImpl.hpp"
 #include "EVI/Enums.hpp"
+#include "EVI/impl/Bitpack.hpp"
 #include "EVI/impl/CKKSTypes.hpp"
 #include "EVI/impl/Const.hpp"
+#include "EVI/impl/Encode.hpp"
 #include "utils/DebUtils.hpp"
 #include "utils/Exceptions.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/Sampler.hpp"
+#include "utils/Serialization.hpp"
 #include "utils/Utils.hpp"
 #include <algorithm>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <vector>
 
 // deb header
 #include <deb/SecretKeyGenerator.hpp>
@@ -36,6 +40,22 @@
 
 namespace evi {
 namespace detail {
+
+namespace {
+inline void setPrimeBits(IQuery &q, const Parameter &param) {
+    const uint8_t q_bits = serialization::bitLengthU64(param->getPrimeQ());
+    const uint8_t p_bits = serialization::bitLengthU64(param->getPrimeP());
+    q.prime_q_bits = q_bits;
+    q.prime_p_bits = (q.getLevel() ? p_bits : 0);
+}
+
+inline void setPrimeBits(IData &d, const Parameter &param) {
+    const uint8_t q_bits = serialization::bitLengthU64(param->getPrimeQ());
+    const uint8_t p_bits = serialization::bitLengthU64(param->getPrimeP());
+    d.prime_q_bits = q_bits;
+    d.prime_p_bits = (d.getLevel() ? p_bits : 0);
+}
+} // namespace
 
 template <EvalMode M>
 EncryptorImpl<M>::EncryptorImpl(const Context &context, const std::optional<std::vector<u8>> &seed)
@@ -83,14 +103,29 @@ template <EvalMode M>
 void EncryptorImpl<M>::loadEncKey(std::istream &in) {
     // TODO: replace bellow with the following deb function
     // deb::deserializeFromStream(in, deb_enc_key_);
-    // utils::syncDebSwkKeyToFixedKey(context_, deb_enc_key_, encKey);
+    // utils::syncFixedKeyToDebSwkKey(context_, encKey_, deb_enc_key_);
     char preset_buf[4];
     in.read(reinterpret_cast<char *>(&enc_loaded_), sizeof(bool));
     in.read(preset_buf, sizeof(preset_buf));
-    in.read(reinterpret_cast<char *>(encKey_->getPolyData(1, 0)), U64_DEGREE);
-    in.read(reinterpret_cast<char *>(encKey_->getPolyData(1, 1)), U64_DEGREE);
-    in.read(reinterpret_cast<char *>(encKey_->getPolyData(0, 0)), U64_DEGREE);
-    in.read(reinterpret_cast<char *>(encKey_->getPolyData(0, 1)), U64_DEGREE);
+    auto header = serialization::readHeader(in);
+    if (header.has_header && header.version != serialization::kVersionV1) {
+        throw evi::NotSupportedError("Unsupported encryption key serialization version");
+    }
+    if (header.has_header) {
+        uint8_t q_bits = 0;
+        uint8_t p_bits = 0;
+        in.read(reinterpret_cast<char *>(&q_bits), sizeof(q_bits));
+        in.read(reinterpret_cast<char *>(&p_bits), sizeof(p_bits));
+        serialization::readPackedU64(in, encKey_->getPolyData(1, 0), DEGREE, q_bits);
+        serialization::readPackedU64(in, encKey_->getPolyData(1, 1), DEGREE, p_bits);
+        serialization::readPackedU64(in, encKey_->getPolyData(0, 0), DEGREE, q_bits);
+        serialization::readPackedU64(in, encKey_->getPolyData(0, 1), DEGREE, p_bits);
+    } else {
+        in.read(reinterpret_cast<char *>(encKey_->getPolyData(1, 0)), U64_DEGREE);
+        in.read(reinterpret_cast<char *>(encKey_->getPolyData(1, 1)), U64_DEGREE);
+        in.read(reinterpret_cast<char *>(encKey_->getPolyData(0, 0)), U64_DEGREE);
+        in.read(reinterpret_cast<char *>(encKey_->getPolyData(0, 1)), U64_DEGREE);
+    }
     utils::syncFixedKeyToDebSwkKey(context_, encKey_, deb_enc_key_);
     enc_loaded_ = true;
 }
@@ -203,17 +238,13 @@ Query EncryptorImpl<M>::encrypt(const span<float> msg, const MultiSecretKey &sec
         double delta = scale.value_or(std::pow(2.0, context_->getParam()->getScaleFactor()));
         sampler_.sampleGaussian(ctxt_b_q);
         for (u64 i = 0; i < item_per_ciphertext; ++i) {
-            // RMP currently uses 51-bit PRIME_Q and 55-bit PRIME_P, so this rounded
-            // coefficient stays within int64_t before converting to unsigned magnitude.
-            // If a future preset moves to 59-bit-or-larger primes, this path should
-            // be revisited and promoted back to i128-based handling.
-            i64 temp = static_cast<i64>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
+            i128 temp = static_cast<i128>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
             bool is_positive = temp >= 0;
-            u64 abs_temp = is_positive ? static_cast<u64>(temp) : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
+            temp = is_positive ? temp : -temp;
 
             u64 value_q = reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
                                         context_->getParam()->getTwoTo64Q(), context_->getParam()->getTwoTo64ShoupQ(),
-                                        context_->getParam()->getBarrRatioQ(), static_cast<u128>(abs_temp));
+                                        context_->getParam()->getBarrRatioQ(), static_cast<u128>(temp));
             ctxt_b_q[i] += (is_positive ? value_q : (context_->getParam()->getPrimeQ() - value_q));
             if (ctxt_b_q[i] >= context_->getParam()->getPrimeQ()) {
                 ctxt_b_q[i] -= context_->getParam()->getPrimeQ();
@@ -221,7 +252,8 @@ Query EncryptorImpl<M>::encrypt(const span<float> msg, const MultiSecretKey &sec
         }
 
         context_->nttModQ(ctxt_b_q);
-        context_->madModQ(ctxt_a_q, seckey[j]->sec_key_q_, ctxt_b_q);
+        SecretKeyAccessScope key_access_j(seckey[j]);
+        context_->madModQ(ctxt_a_q, seckey[j]->getKeyQ(), ctxt_b_q);
         tmp_res.emplace_back(ctxt_b_q.begin(), ctxt_b_q.end());
     }
 
@@ -240,6 +272,7 @@ Query EncryptorImpl<M>::encrypt(const span<float> msg, const MultiSecretKey &sec
         context_->modDown(ctxt_b_q, ctxt_b_p);
         context_->addModQ(ctxt_b_q, tmp_res[j + 1], ctxt_b_q);
         res.push_back(std::make_shared<SingleBlock<DataType::CIPHER>>(ctxt_a_q, ctxt_b_q));
+        setPrimeBits(*res.back(), context_->getParam());
         res.back()->n = 1;
         res.back()->degree = DEGREE;
         res.back()->dim = context_->getPadRank();
@@ -325,7 +358,7 @@ template <EvalMode M>
 std::vector<Query> EncryptorImpl<M>::encrypt(const std::vector<std::vector<float>> &msg, const std::string &enckey_path,
                                              const EncodeType type, const bool level, std::optional<float> scale) {
     loadEncKey(enckey_path);
-    if (context_->getEvalMode() == EvalMode::MM) {
+    if (CHECK_MM(context_->getEvalMode())) {
         return encryptMM(msg, type, level, scale);
     } else {
         return encrypt(msg, type, level, scale);
@@ -336,7 +369,7 @@ template <EvalMode M>
 std::vector<Query> EncryptorImpl<M>::encrypt(const std::vector<std::vector<float>> &msg, std::istream &enckey_stream,
                                              const EncodeType type, const bool level, std::optional<float> scale) {
     loadEncKey(enckey_stream);
-    if (context_->getEvalMode() == EvalMode::MM) {
+    if (CHECK_MM(context_->getEvalMode())) {
         return encryptMM(msg, type, level, scale);
     } else {
         return encrypt(msg, type, level, scale);
@@ -460,6 +493,45 @@ std::vector<Query> EncryptorImpl<M>::encrypt(const std::vector<std::vector<float
 }
 
 template <EvalMode M>
+std::vector<std::string> EncryptorImpl<M>::encryptRow(const std::vector<std::vector<float>> &msg, const EncodeType type,
+                                                      const bool level, std::optional<float> scale) {
+    if constexpr (!CHECK_MM(M)) {
+        throw evi::NotSupportedError("Batch encryption is only supported for MM mode");
+    }
+
+    double delta = 0.0;
+    double scale_bits = 0.0;
+    if (type == EncodeType::QUERY) {
+        scale_bits = context_->getParam()->getScaleFactor();
+    } else {
+        scale_bits = level ? context_->getParam()->getDBScaleFactor() : context_->getParam()->getScaleFactor();
+    }
+    delta = scale.value_or(std::pow(2.0, scale_bits));
+
+    std::vector<std::string> res;
+    for (int i = 0; i < msg.size(); i++) {
+
+        std::array<float, DEGREE> coeff_msg{};
+        for (u64 j = 0; j < context_->getRank(); ++j) {
+            coeff_msg[j] = msg[i][j];
+        }
+        Query::SingleQuery single_query = innerEncrypt(msg[i], level, delta, std::nullopt, /*is_ntt*/ false);
+
+        single_query->n = 1;
+        single_query->dim = context_->getRank();
+        single_query->show_dim = context_->getShowRank();
+        single_query->degree = DEGREE;
+        single_query->encode_type = type;
+        single_query->scale_bit = std::log2(delta);
+
+        std::ostringstream oss(std::ios::binary);
+        single_query->serializeTo(oss);
+        res.emplace_back(oss.str());
+    }
+    return res;
+}
+
+template <EvalMode M>
 std::vector<Query> EncryptorImpl<M>::encryptMM(const std::vector<std::vector<float>> &msg, const EncodeType type,
                                                const bool level, std::optional<float> scale) {
     if (!msg.size()) {
@@ -469,7 +541,14 @@ std::vector<Query> EncryptorImpl<M>::encryptMM(const std::vector<std::vector<flo
         throw evi::NotSupportedError("Batch encryption is only supported for MM mode");
     }
 
-    double delta = scale.value_or(std::pow(2.0, context_->getParam()->getDBScaleFactor()));
+    double delta = 0.0;
+    double scale_bits = 0.0;
+    if (type == EncodeType::QUERY) {
+        scale_bits = context_->getParam()->getScaleFactor();
+    } else {
+        scale_bits = level ? context_->getParam()->getDBScaleFactor() : context_->getParam()->getScaleFactor();
+    }
+    delta = scale.value_or(std::pow(2.0, scale_bits));
 
     int rows = msg[0].size();
     int cols = DEGREE;
@@ -497,6 +576,7 @@ std::vector<Query> EncryptorImpl<M>::encryptMM(const std::vector<std::vector<flo
             tmp->show_dim = static_cast<u64>(rows);
             tmp->degree = DEGREE;
             tmp->encode_type = type;
+            tmp->scale_bit = std::log2(delta);
             q.push_back(tmp);
         }
         queries.emplace_back(std::move(q));
@@ -527,7 +607,8 @@ Query::SingleQuery EncryptorImpl<M>::innerEncrypt(const span<float> &msg, const 
     // encrypt with deb_encryptor
     bool ntt_val = ntt.value_or(true);
     if (seckey.has_value()) {
-        deb_encryptor_.encrypt(deb_msg, (*seckey)->deb_sk_, deb_ctxt,
+        SecretKeyAccessScope key_access(*seckey);
+        deb_encryptor_.encrypt(deb_msg, (*seckey)->getDebSecKey(), deb_ctxt,
                                deb::EncryptOptions().Scale(scale).Level(level).NttOut(ntt_val));
     } else {
         deb_encryptor_.encrypt(deb_msg, deb_enc_key_, deb_ctxt,
@@ -535,9 +616,13 @@ Query::SingleQuery EncryptorImpl<M>::innerEncrypt(const span<float> &msg, const 
     }
 
     if (level) {
-        return std::make_shared<SingleBlock<DataType::CIPHER>>(ctxt_a_q, ctxt_a_p, ctxt_b_q, ctxt_b_p);
+        auto res = std::make_shared<SingleBlock<DataType::CIPHER>>(ctxt_a_q, ctxt_a_p, ctxt_b_q, ctxt_b_p);
+        setPrimeBits(*res, context_->getParam());
+        return res;
     } else {
-        return std::make_shared<SingleBlock<DataType::CIPHER>>(ctxt_a_q, ctxt_b_q);
+        auto res = std::make_shared<SingleBlock<DataType::CIPHER>>(ctxt_a_q, ctxt_b_q);
+        setPrimeBits(*res, context_->getParam());
+        return res;
     }
 }
 
@@ -565,7 +650,7 @@ Query EncryptorImpl<M>::encode(const span<float> msg, const EncodeType type, con
     if (!msg.size()) {
         throw evi::EncryptionError("Invalid data type for encryption! Input message must has its size");
     }
-    u64 scale_bits;
+    double scale_bits;
     if (scale.has_value()) {
         scale_bits = static_cast<u64>(std::log2(scale.value()));
     } else {
@@ -580,6 +665,7 @@ Query EncryptorImpl<M>::encode(const span<float> msg, const EncodeType type, con
             throw evi::NotSupportedError("Only EncodeType::QUERY is supported for EvalMode::MM.");
         }
         auto tmp = innerEncode(msg, level, delta, msg.size(), /* ntt */ false);
+        setPrimeBits(*tmp, context_->getParam());
         tmp->n = 1;
         tmp->dim = msg.size();
         tmp->degree = DEGREE;
@@ -602,6 +688,7 @@ Query EncryptorImpl<M>::encode(const span<float> msg, const EncodeType type, con
             }
             copy_offset += copy_size;
             auto tmp = innerEncode(tmp_msg, level, delta, tmp_rank);
+            setPrimeBits(*tmp, context_->getParam());
             tmp->n = 1;
             tmp->dim = tmp_rank;
             tmp->show_dim = msg.size();
@@ -629,14 +716,14 @@ Query EncryptorImpl<M>::encode(const span<float> msg, const EncodeType type, con
             poly plaintext_q{};
 
             for (u64 i = 0; i < tmp_rank; ++i) {
-                i64 temp = static_cast<i64>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
+                i128 temp = static_cast<i128>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
                 bool is_positive = temp >= 0;
-                u64 abs_temp = is_positive ? static_cast<u64>(temp) : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
+                temp = is_positive ? temp : -temp;
 
                 u64 value_q =
                     reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
                                   context_->getParam()->getTwoTo64Q(), context_->getParam()->getTwoTo64ShoupQ(),
-                                  context_->getParam()->getBarrRatioQ(), static_cast<u128>(abs_temp));
+                                  context_->getParam()->getBarrRatioQ(), static_cast<u128>(temp));
                 plaintext_q[i] = is_positive ? value_q : (context_->getParam()->getPrimeQ() - value_q);
             }
             context_->nttModQMini(plaintext_q, tmp_rank);
@@ -655,6 +742,7 @@ Query EncryptorImpl<M>::encode(const span<float> msg, const EncodeType type, con
         }
 
         auto tmp = innerEncode(tmp_msg, level, delta);
+        setPrimeBits(*tmp, context_->getParam());
         tmp->n = 1;
         tmp->dim = msg.size();
         tmp->degree = DEGREE;
@@ -678,23 +766,8 @@ Query::SingleQuery EncryptorImpl<M>::innerEncode(const span<float> &msg, const b
     }
 
     u64 num_iter = msg_size.value_or(DEGREE);
-    for (u64 i = 0; i < num_iter; ++i) {
-        i64 temp = static_cast<i64>(msg[i] * scale + signBiasDouble(msg[i]));
-        i64 is_positive = temp >= 0;
-        u64 abs_temp = is_positive ? static_cast<u64>(temp) : (static_cast<u64>(~static_cast<u64>(temp)) + 1);
-
-        u64 value_q = reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
-                                    context_->getParam()->getTwoTo64Q(), context_->getParam()->getTwoTo64ShoupQ(),
-                                    context_->getParam()->getBarrRatioQ(), static_cast<u128>(abs_temp));
-        plaintext_q[i] = selectIfCondU64(is_positive, value_q, context_->getParam()->getPrimeQ() - value_q);
-
-        if (level) {
-            u64 value_p = reduceBarrett(context_->getParam()->getPrimeP(), context_->getParam()->getTwoPrimeP(),
-                                        context_->getParam()->getTwoTo64P(), context_->getParam()->getTwoTo64ShoupP(),
-                                        context_->getParam()->getBarrRatioP(), static_cast<u128>(abs_temp));
-            plaintext_p.value()[i] = selectIfCondU64(is_positive, value_p, context_->getParam()->getPrimeP() - value_p);
-        }
-    }
+    encodeCoeffs<u64>(msg.data(), plaintext_q.data(), level ? plaintext_p.value().data() : nullptr, num_iter, scale,
+                      *context_->getParam());
 
     if (ntt.value_or(true)) {
         if (msg_size.has_value()) {
@@ -708,12 +781,28 @@ Query::SingleQuery EncryptorImpl<M>::innerEncode(const span<float> &msg, const b
                 context_->nttModP(plaintext_p.value());
             }
         }
+
+        // Normalize NTT outputs to [0, p) to avoid lazy ranges (up to 4p).
+        const u64 mod_q = context_->getParam()->getPrimeQ();
+        const u64 two_mod_q = context_->getParam()->getTwoPrimeQ();
+        const u64 mod_p = context_->getParam()->getPrimeP();
+        const u64 two_mod_p = context_->getParam()->getTwoPrimeP();
+        const u64 reduce_count = DEGREE;
+        for (u64 i = 0; i < reduce_count; ++i) {
+            reduceModFactor<4, 1>(mod_q, two_mod_q, plaintext_q[i]);
+        }
+        if (level) {
+            for (u64 i = 0; i < reduce_count; ++i) {
+                reduceModFactor<4, 1>(mod_p, two_mod_p, plaintext_p.value()[i]);
+            }
+        }
     }
     if (level) {
         res = std::make_shared<SingleBlock<DataType::PLAIN>>(plaintext_q, plaintext_p.value());
     } else {
         res = std::make_shared<SingleBlock<DataType::PLAIN>>(plaintext_q);
     }
+    setPrimeBits(*res, context_->getParam());
     return res;
 }
 
@@ -759,6 +848,7 @@ Blob EncryptorImpl<M>::encrypt(const span<float> msg, const int num_items, const
 
         if (level) {
             auto tmp = std::make_shared<Matrix<DataType::CIPHER>>(a_q, a_p.value(), b_q, b_p.value());
+            setPrimeBits(*tmp, context_->getParam());
             tmp->dim = msg.size() / num_items;
             tmp->n = num_items;
             tmp->degree = DEGREE;
@@ -767,6 +857,7 @@ Blob EncryptorImpl<M>::encrypt(const span<float> msg, const int num_items, const
 
         } else {
             auto tmp = std::make_shared<Matrix<DataType::CIPHER>>(a_q, b_q);
+            setPrimeBits(*tmp, context_->getParam());
             tmp->dim = msg.size() / num_items;
             tmp->n = num_items;
             tmp->degree = DEGREE;
@@ -820,9 +911,11 @@ Blob EncryptorImpl<M>::encrypt(const span<float> msg, const int num_items, const
 
             if (level) {
                 res.push_back(std::make_shared<Matrix<DataType::CIPHER>>(a_q, a_p.value(), b_q, b_p.value()));
+                setPrimeBits(*res.back(), context_->getParam());
 
             } else {
                 res.push_back(std::make_shared<Matrix<DataType::CIPHER>>(a_q, b_q));
+                setPrimeBits(*res.back(), context_->getParam());
             }
 
             res[db_idx]->n = num_items;
@@ -867,6 +960,7 @@ Blob EncryptorImpl<M>::encode(const span<float> msg, const int num_items, const 
         } else {
             res.emplace_back(std::make_shared<Matrix<DataType::PLAIN>>(q));
         }
+        setPrimeBits(*res[0], context_->getParam());
 
         res[0]->dim = msg.size() / num_items;
         res[0]->n = num_items;
@@ -914,9 +1008,11 @@ Blob EncryptorImpl<M>::encode(const span<float> msg, const int num_items, const 
 
             if (level) {
                 res.push_back(std::make_shared<Matrix<DataType::PLAIN>>(q, p.value()));
+                setPrimeBits(*res.back(), context_->getParam());
 
             } else {
                 res.push_back(std::make_shared<Matrix<DataType::PLAIN>>(q));
+                setPrimeBits(*res.back(), context_->getParam());
             }
 
             res[db_idx]->n = num_items;
@@ -932,12 +1028,18 @@ template class EncryptorImpl<EvalMode::RMP>;
 template class EncryptorImpl<EvalMode::RMS>;
 template class EncryptorImpl<EvalMode::MS>;
 template class EncryptorImpl<EvalMode::MM>;
+template class EncryptorImpl<EvalMode::MMS>;
+template class EncryptorImpl<EvalMode::MM32>;
+template class EncryptorImpl<EvalMode::MMS32>;
 
 Encryptor makeEncryptor(const Context &context, const std::optional<std::vector<u8>> &seed) {
     switch (context->getEvalMode()) {
     case EvalMode::FLAT:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::FLAT>>(context, seed));
+    case EvalMode::SINGLE:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::SINGLE>>(context, seed));
     case EvalMode::RMP:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::RMP>>(context, seed));
@@ -950,6 +1052,15 @@ Encryptor makeEncryptor(const Context &context, const std::optional<std::vector<
     case EvalMode::MM:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::MM>>(context, seed));
+    case EvalMode::MMS:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MMS>>(context, seed));
+    case EvalMode::MM32:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MM32>>(context, seed));
+    case EvalMode::MMS32:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MMS32>>(context, seed));
     default:
         throw NotSupportedError("invalid mode");
     }
@@ -959,6 +1070,9 @@ Encryptor makeEncryptor(const Context &context, const KeyPack &keypack, const st
     case EvalMode::FLAT:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::FLAT>>(context, keypack, seed));
+    case EvalMode::SINGLE:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::SINGLE>>(context, keypack, seed));
     case EvalMode::RMP:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::RMP>>(context, keypack, seed));
@@ -971,6 +1085,15 @@ Encryptor makeEncryptor(const Context &context, const KeyPack &keypack, const st
     case EvalMode::MM:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::MM>>(context, keypack, seed));
+    case EvalMode::MMS:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MMS>>(context, keypack, seed));
+    case EvalMode::MM32:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MM32>>(context, keypack, seed));
+    case EvalMode::MMS32:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MMS32>>(context, keypack, seed));
     default:
         throw NotSupportedError("invalid mode");
     }
@@ -992,6 +1115,15 @@ Encryptor makeEncryptor(const Context &context, const std::string &path, const s
     case EvalMode::MM:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::MM>>(context, path, seed));
+    case EvalMode::MMS:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MMS>>(context, path, seed));
+    case EvalMode::MM32:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MM32>>(context, path, seed));
+    case EvalMode::MMS32:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MMS32>>(context, path, seed));
     default:
         throw NotSupportedError("invalid mode");
     }
@@ -1013,6 +1145,15 @@ Encryptor makeEncryptor(const Context &context, std::istream &in, const std::opt
     case EvalMode::MM:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::MM>>(context, in, seed));
+    case EvalMode::MMS:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MMS>>(context, in, seed));
+    case EvalMode::MM32:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MM32>>(context, in, seed));
+    case EvalMode::MMS32:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::MMS32>>(context, in, seed));
     default:
         throw NotSupportedError("invalid mode");
     }

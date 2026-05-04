@@ -73,5 +73,4 @@ CheckOptions:
 # Meanwhile, to exclude 3rd party headers, you have to specify the part of paths like:
 # HeaderFilterRegex: 'Example/(include|src|test)'
 HeaderFilterRegex: '^(include/|src/|test/)'
-AnalyzeTemporaryDtors: false
 FormatStyle: file

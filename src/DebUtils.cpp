@@ -18,6 +18,7 @@
 
 #include "utils/DebUtils.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace evi {
@@ -30,6 +31,10 @@ deb::Preset getDebPreset(const detail::Context &context) {
         return deb::PRESET_EVI_IP0;
     case ParameterPreset::IP1:
         return deb::PRESET_EVI_IP1;
+    case ParameterPreset::IP2:
+        return deb::PRESET_EVI_IP2;
+    case ParameterPreset::IP3:
+        return deb::PRESET_EVI_IP3;
     case evi::ParameterPreset::QF0:
     case evi::ParameterPreset::QF1:
         return deb::PRESET_EVI_QF;
@@ -43,11 +48,27 @@ deb::Preset getDebPreset(const std::string &preset) {
         return deb::PRESET_EVI_IP0;
     } else if (preset == "IP1") {
         return deb::PRESET_EVI_IP1;
+    } else if (preset == "IP2") {
+        return deb::PRESET_EVI_IP2;
+    } else if (preset == "IP3") {
+        return deb::PRESET_EVI_IP3;
     } else if (preset == "QF0" || preset == "QF1") {
         return deb::PRESET_EVI_QF;
     } else {
         throw InvalidInputError("Invalid preset in context");
     }
+}
+
+deb::Size getDebNumP(const detail::Context &context) {
+    return deb::get_num_p(getDebPreset(context));
+}
+
+deb::Size getDebGadgetRank(const detail::Context &context) {
+    return deb::get_gadget_rank(getDebPreset(context));
+}
+
+const deb::u64 *getDebPrimes(const detail::Context &context) {
+    return deb::get_primes(getDebPreset(context));
 }
 
 std::optional<deb::RNGSeed> convertDebSeed(const std::optional<std::vector<u8>> &seed) {
@@ -61,6 +82,7 @@ std::optional<deb::RNGSeed> convertDebSeed(const std::optional<std::vector<u8>> 
     }
     return std::nullopt;
 }
+
 bool syncFixedKeyToDebSwkKey(const detail::Context &context, const detail::FixedKeyType &fixed, deb::SwitchKey &swk) {
     if (swk.axSize() == 1 && swk.bxSize() == 1) {
         if (swk.ax()[0].data() == fixed->getPolyData(1, 0) && swk.ax()[1].data() == fixed->getPolyData(1, 1) &&
@@ -93,45 +115,36 @@ bool syncFixedKeyToDebSwkKey(const detail::Context &context, const detail::Fixed
     return true;
 }
 
-bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::VariadicKeyType &variad, deb::SwitchKey &swk) {
-    const auto size = context->getPadRank();
-    if (swk.axSize() == size && swk.bxSize() == size) {
-        bool matched = true;
-        for (u64 i = 0; i < size; ++i) {
-            if (swk.ax(i)[0].data() != variad->getPolyData(1, 0) + i * detail::DEGREE ||
-                swk.ax(i)[1].data() != variad->getPolyData(1, 1) + i * detail::DEGREE ||
-                swk.bx(i)[0].data() != variad->getPolyData(0, 0) + i * detail::DEGREE ||
-                swk.bx(i)[1].data() != variad->getPolyData(0, 1) + i * detail::DEGREE) {
-                matched = false;
-                break;
-            }
-        }
-        if (matched) {
-            return false;
+bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::VariadicKeyType &variadic,
+                           deb::SwitchKey &swk) {
+    const auto preset = getDebPreset(context);
+    const auto num_p = getDebNumP(context);
+
+    const auto num_secret = deb::get_num_secret(preset);
+    const auto gadget_rank = getDebGadgetRank(context);
+    const auto ax_size = (swk.type() == deb::SWK_MODPACK_SELF) ? context->getPadRank() : gadget_rank;
+    const auto bx_size = (swk.type() == deb::SWK_MODPACK_SELF) ? context->getPadRank() : ax_size * num_secret;
+
+    if (swk.axSize() != ax_size) {
+        swk.getAx().clear();
+        swk.addAx(num_p, ax_size, true);
+    }
+    for (deb::Size i = 0; i < ax_size; ++i) {
+        for (deb::Size pj = 0; pj < num_p; ++pj) {
+            swk.ax(i)[pj].setData(variadic->getPolyData(1, static_cast<int>(pj)) + i * detail::DEGREE, detail::DEGREE);
         }
     }
-    if (swk.axSize() != size) {
-        swk.addAx(2, size - swk.axSize());
+
+    if (swk.bxSize() != bx_size) {
+        swk.getBx().clear();
+        swk.addBx(num_p, bx_size, true);
     }
-    for (u64 i = 0; i < size; ++i) {
-        if (swk.ax(i)[0].data() != variad->getPolyData(1, 0) + i * detail::DEGREE) {
-            swk.ax(i)[0].setData(variad->getPolyData(1, 0) + i * detail::DEGREE, detail::DEGREE);
-        }
-        if (swk.ax(i)[1].data() != variad->getPolyData(1, 1) + i * detail::DEGREE) {
-            swk.ax(i)[1].setData(variad->getPolyData(1, 1) + i * detail::DEGREE, detail::DEGREE);
-        }
-    }
-    if (swk.bxSize() != size) {
-        swk.addBx(2, size - swk.bxSize());
-    }
-    for (u64 i = 0; i < size; ++i) {
-        if (swk.bx(i)[0].data() != variad->getPolyData(0, 0) + i * detail::DEGREE) {
-            swk.bx(i)[0].setData(variad->getPolyData(0, 0) + i * detail::DEGREE, detail::DEGREE);
-        }
-        if (swk.bx(i)[1].data() != variad->getPolyData(0, 1) + i * detail::DEGREE) {
-            swk.bx(i)[1].setData(variad->getPolyData(0, 1) + i * detail::DEGREE, detail::DEGREE);
+    for (deb::Size i = 0; i < bx_size; ++i) {
+        for (deb::Size pj = 0; pj < num_p; ++pj) {
+            swk.bx(i)[pj].setData(variadic->getPolyData(0, static_cast<int>(pj)) + i * detail::DEGREE, detail::DEGREE);
         }
     }
+
     return true;
 }
 
@@ -159,6 +172,34 @@ deb::Ciphertext convertPointerToDebCipher(const detail::Context &context, detail
         deb_cipher[1][1].setData(a_p, detail::DEGREE);
         deb_cipher[0][1].setData(b_p, detail::DEGREE);
     }
+    deb_cipher.setEncoding(deb::COEFF);
+    deb_cipher.setNTT(is_ntt);
+    return deb_cipher;
+}
+
+deb::Preset getDebPreset(evi::ParameterPreset preset) {
+    switch (preset) {
+    case ParameterPreset::IP0:
+        return deb::PRESET_EVI_IP0;
+    case ParameterPreset::IP1:
+        return deb::PRESET_EVI_IP1;
+    case ParameterPreset::IP2:
+        return deb::PRESET_EVI_IP2;
+    case ParameterPreset::IP3:
+        return deb::PRESET_EVI_IP3;
+    case ParameterPreset::QF0:
+    case ParameterPreset::QF1:
+        return deb::PRESET_EVI_QF;
+    default:
+        throw InvalidInputError("Invalid ParameterPreset for deb conversion");
+    }
+}
+
+deb::Ciphertext convertPointerToDebCipherWithPreset(evi::ParameterPreset preset, detail::u64 *a_q, detail::u64 *b_q,
+                                                    bool is_ntt) {
+    deb::Ciphertext deb_cipher(getDebPreset(preset), 0, 2);
+    deb_cipher[1][0].setData(a_q, detail::DEGREE);
+    deb_cipher[0][0].setData(b_q, detail::DEGREE);
     deb_cipher.setEncoding(deb::COEFF);
     deb_cipher.setNTT(is_ntt);
     return deb_cipher;

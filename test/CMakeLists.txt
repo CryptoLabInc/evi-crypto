@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 # ~~~
+
 function(add_gtest_target_to_ctest target)
   add_test(NAME "${target}" COMMAND "${target}"
                                     --gtest_output=xml:${target}.xml)
@@ -24,7 +25,7 @@ cpmaddpackage(
   GITHUB_REPOSITORY
   google/googletest
   GIT_TAG
-  release-1.12.1
+  release-1.11.0
   OPTIONS
   "INSTALL_GTEST OFF"
   "BUILD_GMOCK OFF")
@@ -46,5 +47,14 @@ evi_add_test(ContextTest ContextTest.cpp utils.cpp)
 evi_add_test(KeyValidationTest KeyValidationTest.cpp utils.cpp)
 
 if(BUILD_KEY_MANAGEMENT)
-  evi_add_test(KeyManagementTest KeyManagementTest.cpp)
+  evi_add_test(KeyManagementTest KeyManagementTest.cpp utils.cpp)
+  evi_add_test(AuditTest AuditTest.cpp)
 endif()
+
+evi_add_test(SerializationRoundTripTest SerializationRoundTripTest.cpp
+             utils.cpp)
+
+evi_add_test(SecurityTest SecurityTest.cpp)
+
+evi_add_test(EncodeTest EncodeTest.cpp)
+evi_add_test(SyncKeyUAFTest SyncKeyUAFTest.cpp utils.cpp)

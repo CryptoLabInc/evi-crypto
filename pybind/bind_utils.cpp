@@ -23,10 +23,13 @@
 #include "utils/Utils.hpp"
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
+#include <vector>
 
 namespace py = pybind11;
 
@@ -63,4 +66,51 @@ void bind_utils(py::module_ &m) {
             evi::Utils::deserializeKeyFiles(is, seckey, keypack);
         },
         py::arg("data"), py::arg("secret_key"), py::arg("key_pack"));
+
+    utils_mod.def(
+        "get_random_bytes",
+        [](std::size_t size, const std::optional<py::bytes> &seed) {
+            std::optional<std::vector<uint8_t>> seed_bytes = std::nullopt;
+            if (seed.has_value()) {
+                std::string seed_str = static_cast<std::string>(seed.value());
+                seed_bytes = std::vector<uint8_t>(seed_str.begin(), seed_str.end());
+            }
+            const std::vector<uint8_t> bytes = evi::Utils::generateRandomBytes(size, seed_bytes);
+            return py::bytes(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+        },
+        py::arg("size"), py::arg("seed") = py::none(), "Alias of getrandombytes(size, seed=None).");
+
+    utils_mod.def(
+        "encrypt_metadata",
+        [](const std::string &metadata, const py::bytes &key, const std::optional<py::bytes> &aad) {
+            std::string key_str = key;
+            std::vector<uint8_t> key_bytes(key_str.begin(), key_str.end());
+
+            std::vector<uint8_t> aad_bytes;
+            if (aad.has_value()) {
+                std::string aad_str = static_cast<std::string>(aad.value());
+                aad_bytes.assign(aad_str.begin(), aad_str.end());
+            }
+
+            const std::string encrypted = evi::Utils::encryptMetadata(metadata, key_bytes, aad_bytes);
+            return py::str(encrypted);
+        },
+        py::arg("metadata"), py::arg("key"), py::arg("aad") = py::none());
+
+    utils_mod.def(
+        "decrypt_metadata",
+        [](const std::string &encrypted, const py::bytes &key, const std::optional<py::bytes> &aad) {
+            std::string key_str = key;
+            std::vector<uint8_t> key_bytes(key_str.begin(), key_str.end());
+
+            std::vector<uint8_t> aad_bytes;
+            if (aad.has_value()) {
+                std::string aad_str = static_cast<std::string>(aad.value());
+                aad_bytes.assign(aad_str.begin(), aad_str.end());
+            }
+
+            const std::string decrypted = evi::Utils::decryptMetadata(encrypted, key_bytes, aad_bytes);
+            return py::str(decrypted);
+        },
+        py::arg("encrypted"), py::arg("key"), py::arg("aad") = py::none());
 }

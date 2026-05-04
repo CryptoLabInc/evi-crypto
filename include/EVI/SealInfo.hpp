@@ -20,7 +20,6 @@
 #include "EVI/Enums.hpp"
 #include "EVI/Export.hpp"
 
-#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,7 +28,9 @@ namespace evi {
 
 /// @brief AES-256 key size in bytes.
 constexpr int AES256_KEY_SIZE = 32;
+/// @brief AES-GCM IV size in bytes.
 constexpr int AES_GCM_IV_SIZE = 12;
+/// @brief AES-GCM authentication tag size in bytes.
 constexpr int AES_GCM_TAG_SIZE = 16;
 
 namespace detail {
@@ -38,8 +39,7 @@ struct SealInfo;
 
 /**
  * @class SealInfo
- * @brief Encapsulates sealing configuration used to protect secret keys in in homomorphic encryption schemes during
- * storage.
+ * @brief Encapsulates sealing configuration used to protect secret keys during storage.
  *
  * The `SealInfo` class holds information related to how a secret key (e.g., `SecretKey`) should be sealed
  * before being saved externally. Supported sealing modes include no sealing and AES-256 key wrapping.
@@ -77,5 +77,10 @@ private:
     friend const std::shared_ptr<detail::SealInfo> &getImpl(const SealInfo &) noexcept;
     /// @endcond
 };
+
+// Declarations outside the class so MSVC applies dllexport correctly.
+// (friend declarations inside a dllexport class do not export the friend.)
+std::shared_ptr<detail::SealInfo> &getImpl(SealInfo &) noexcept;
+const std::shared_ptr<detail::SealInfo> &getImpl(const SealInfo &) noexcept;
 
 } // namespace evi

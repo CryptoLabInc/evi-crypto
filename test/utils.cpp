@@ -24,8 +24,9 @@
 #include <random>
 #include <type_traits>
 
-static constexpr std::array<evi::ParameterPreset, 4> ALL_PRESETS = {
-    evi::ParameterPreset::IP0, evi::ParameterPreset::IP1, evi::ParameterPreset::QF0, evi::ParameterPreset::QF1};
+static constexpr std::array<evi::ParameterPreset, 6> ALL_PRESETS = {
+    evi::ParameterPreset::IP0, evi::ParameterPreset::IP1, evi::ParameterPreset::IP2,
+    evi::ParameterPreset::IP3, evi::ParameterPreset::QF0, evi::ParameterPreset::QF1};
 evi::ParameterPreset get_random_preset() {
     static std::mt19937 gen{std::random_device{}()};
     std::uniform_int_distribution<size_t> dist(0, ALL_PRESETS.size() - 1);
@@ -55,6 +56,12 @@ std::string getParamToString(evi::ParameterPreset preset) {
         break;
     case evi::ParameterPreset::IP1:
         res = "IP1";
+        break;
+    case evi::ParameterPreset::IP2:
+        res = "IP2";
+        break;
+    case evi::ParameterPreset::IP3:
+        res = "IP3";
         break;
     case evi::ParameterPreset::QF1:
         res = "QF1";
@@ -112,10 +119,10 @@ void randomFaces(std::vector<float> &face, const float lo, const float hi, const
     }
 }
 
-void randomFaces(float *face, const float lo, const float hi, const int n, const int dim) {
+void randomFaces(float *face, const float lo, const float hi, const int n, const int dim,
+                 std::optional<unsigned> seed) {
     std::uniform_real_distribution<float> dis(lo, hi);
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    std::mt19937 gen = seed.has_value() ? std::mt19937(seed.value()) : std::mt19937(std::random_device{}());
 
     for (int i = 0; i < n * dim; i++) {
         face[i] = dis(gen);

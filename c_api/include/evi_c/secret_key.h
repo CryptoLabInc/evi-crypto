@@ -25,6 +25,9 @@ extern "C" {
 #endif
 
 void evi_secret_key_destroy(evi_secret_key_t *seckey);
+evi_status_t evi_secret_key_reset(evi_secret_key_t *seckey);
+evi_status_t evi_secret_key_open_access(evi_secret_key_t *seckey);
+evi_status_t evi_secret_key_close_access(evi_secret_key_t *seckey);
 evi_status_t evi_secret_key_create(const evi_context_t *context, evi_secret_key_t **out_key);
 evi_status_t evi_secret_key_create_from_path(const char *path, evi_secret_key_t **out_key);
 evi_status_t evi_secret_key_create_from_path_with_seal_info(const char *path, const evi_seal_info_t *seal_info,

@@ -20,6 +20,8 @@
 #include "EVI/SecretKey.hpp"
 #include "EVI/impl/KeyGeneratorImpl.hpp"
 
+#include <stdexcept>
+
 namespace evi {
 
 KeyGenerator makeKeyGenerator(const Context &context, const std::optional<std::vector<uint8_t>> &seed) {
@@ -39,8 +41,21 @@ SecretKey KeyGenerator::genSecKey() {
     return sk_ptr;
 }
 
-void KeyGenerator::genPubKeys(SecretKey &sec_key) {
+KeyPack KeyGenerator::genPubKeys(SecretKey &sec_key) {
     (*impl_)->genPubKeys(*getImpl(sec_key));
+    return KeyPack((*impl_)->getKeyPack());
+}
+
+void KeyGenerator::genSharedAKeys(SecretKey &sec_from, const std::vector<SecretKey> &sec_to) {
+    std::vector<detail::SecretKey> detail_sec_to;
+    detail_sec_to.reserve(sec_to.size());
+    for (const auto &sk : sec_to) {
+        detail_sec_to.push_back(*getImpl(sk));
+    }
+    (*impl_)->genSharedASwitchKey(*getImpl(sec_from), detail_sec_to);
+    (*impl_)->genAdditiveSharedASwitchKey(*getImpl(sec_from), detail_sec_to);
+    (*impl_)->genSharedAModPackKey(*getImpl(sec_from), detail_sec_to);
+    (*impl_)->genCCSharedAModPackKey(*getImpl(sec_from), detail_sec_to);
 }
 
 MultiKeyGenerator::MultiKeyGenerator(const std::vector<Context> &contexts, const std::string &store_path,
@@ -70,6 +85,14 @@ SecretKey MultiKeyGenerator::generateKeys(std::ostream &seckey, std::ostream &en
     std::shared_ptr<detail::SecretKey> sk_ptr = std::make_shared<detail::SecretKey>();
     *sk_ptr = impl_->generateKeys(seckey, enckey, evalkey);
     return sk_ptr;
+}
+
+SecretKey MultiKeyGenerator::generateKeys(SecretKey &seckey, std::ostream &enckey, std::ostream &evalkey) {
+    if (!getImpl(seckey) || !(*getImpl(seckey))) {
+        throw std::logic_error("SecretKey impl is null");
+    }
+    impl_->generateKeys(*getImpl(seckey), enckey, evalkey);
+    return seckey;
 }
 
 bool MultiKeyGenerator::checkFileExist() const {

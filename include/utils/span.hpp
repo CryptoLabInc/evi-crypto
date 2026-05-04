@@ -22,11 +22,12 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <vector>
 
-#ifdef _WIN32
+#ifdef _MSC_VER
 #include <malloc.h>
 #endif
 
@@ -41,7 +42,7 @@ struct AlignedAllocator {
 
     T *allocate(std::size_t n) {
         void *ptr = nullptr;
-#ifdef _WIN32
+#ifdef _MSC_VER
         ptr = _aligned_malloc(n * sizeof(T), Alignment);
         if (!ptr) {
             throw std::bad_alloc();
@@ -55,7 +56,7 @@ struct AlignedAllocator {
     }
 
     void deallocate(T *p, std::size_t) noexcept {
-#ifdef _WIN32
+#ifdef _MSC_VER
         _aligned_free(p);
 #else
         free(p);

@@ -39,14 +39,23 @@ class SecretKey;
  */
 class EVI_API SecretKey {
 public:
-    /// @brief Empty handle; initialize with makeSecKey() before use.
+    /// @brief Empty handle; initialize with `makeSecKey()` before use.
     SecretKey() : impl_(nullptr) {}
 
     /**
-     * @brief Constructs a SecretKey from an internal implementation.
+     * @brief Constructs a `SecretKey` from an internal implementation.
      * @param impl Shared pointer to the internal `detail::SecretKey` object.
      */
     SecretKey(std::shared_ptr<detail::SecretKey> impl) : impl_(std::move(impl)) {}
+
+    /// @brief Release this handle immediately.
+    void reset() noexcept;
+
+    /// @brief Open secret-key memory access for direct internal access paths.
+    void openAccess();
+
+    /// @brief Close secret-key memory access and restore protection.
+    void closeAccess();
 
 private:
     std::shared_ptr<detail::SecretKey> impl_;
@@ -58,7 +67,7 @@ private:
 };
 
 /**
- * @brief Creates a empty SecretKey associated with the given context.
+ * @brief Creates an empty `SecretKey` associated with the given context.
  *
  * @param context Context used for key initialization and device selection.
  * @return A new `SecretKey` instance.
@@ -68,7 +77,7 @@ EVI_API SecretKey makeSecKey(const evi::Context &context);
 /**
  * @brief Load the secret key from a file.
  * @param file_path Path to the secret key file.
- * @param s_info  Optional sealing information for unsealing the secret key.
+ * @param s_info Optional sealing information for unsealing the secret key.
  * @return A new `SecretKey` instance.
  */
 EVI_API SecretKey makeSecKey(const std::string &file_path, const std::optional<SealInfo> &s_info = std::nullopt);

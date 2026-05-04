@@ -40,7 +40,8 @@ void normalizeFeature(float *src, const int dim);
 void randomFaces(std::array<float, 4096> &face, const float lo, const float hi, const int dim);
 void randomFaces(std::vector<float> &face, const float lo, const float hi, const int n, const int dim,
                  std::optional<unsigned> seed = std::nullopt);
-void randomFaces(float *face, const float lo, const float hi, const int n, const int dim);
+void randomFaces(float *face, const float lo, const float hi, const int n, const int dim,
+                 std::optional<unsigned> seed = std::nullopt);
 void randomSimilarFace(float *out, const float *face, const int rank, const float t, const bool over,
                        const float perturbation);
 float dot(const float *a, const float *b, const int dim);

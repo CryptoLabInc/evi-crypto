@@ -23,6 +23,7 @@
 #include "EVI/impl/NTT.hpp"
 #include "EVI/impl/Parameter.hpp"
 #include "utils/Utils.hpp"
+#include "utils/security/Security.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -54,10 +55,29 @@ ContextImpl::ContextImpl(const evi::ParameterPreset preset, const evi::DeviceTyp
         rank_ = rank;
         show_rank_ = rank;
         break;
+    case EvalMode::SINGLE:
+        rank_ = rank;
+        show_rank_ = rank;
+        break;
     case EvalMode::MM:
         show_rank_ = rank;
         rank_ = rank;
         // impl ciphertext size
+        num_input_cipher_ = rank;
+        break;
+    case EvalMode::MMS:
+        show_rank_ = rank;
+        rank_ = rank;
+        num_input_cipher_ = rank;
+        break;
+    case EvalMode::MM32:
+        show_rank_ = rank;
+        rank_ = rank;
+        num_input_cipher_ = rank;
+        break;
+    case EvalMode::MMS32:
+        show_rank_ = rank;
+        rank_ = rank;
         num_input_cipher_ = rank;
         break;
     default:
@@ -350,6 +370,10 @@ Parameter setPreset(evi::ParameterPreset name) {
         return std::make_shared<IPBase>();
     } else if (name == evi::ParameterPreset::IP1) {
         return std::make_shared<IP1Base>();
+    } else if (name == evi::ParameterPreset::IP2) {
+        return std::make_shared<IP2Base>();
+    } else if (name == evi::ParameterPreset::IP3) {
+        return std::make_shared<IP3Base>();
     } else {
         throw evi::NotSupportedError("Not supported preset type!");
         return nullptr;
@@ -366,6 +390,7 @@ Parameter setPreset(evi::ParameterPreset name, u64 prime_q, u64 prime_p, u64 psi
 
 Context makeContext(evi::ParameterPreset preset, const evi::DeviceType device_type, const u64 rank,
                     const evi::EvalMode eval_mode, std::optional<const int> device_id) {
+    evi::security::ensureCoreDumpGuard();
 #ifdef ENABLE_EVI_LICENSE
     const char *env_token = std::getenv("ES2_LICENSE_TOKEN");
     std::string token = env_token ? env_token : "";

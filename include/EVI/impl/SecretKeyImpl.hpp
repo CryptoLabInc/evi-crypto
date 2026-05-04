@@ -31,6 +31,8 @@
 #include <fstream>
 #include <iostream>
 #include <istream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -43,10 +45,18 @@ namespace evi {
 namespace fs = std::filesystem;
 
 namespace detail {
+
+class SecretMemoryPages;
+class SecretKey;
+
 struct SecretKeyData {
     SecretKeyData(const evi::detail::Context &context);
     SecretKeyData(const std::string &path, const std::optional<SealInfo> &s_info = std::nullopt);
     SecretKeyData(std::istream &stream, const std::optional<SealInfo> &s_info = std::nullopt);
+    ~SecretKeyData();
+
+    void openAccess();
+    void closeAccess() noexcept;
 
     void loadSecKey(const std::string &dir_path);
     void loadSecKey(std::istream &is);
@@ -64,24 +74,59 @@ struct SecretKeyData {
     s_poly &getCoeff() {
         return sec_coeff_;
     }
+    const s_poly &getCoeff() const {
+        return sec_coeff_;
+    }
     poly &getKeyQ() {
+        return sec_key_q_;
+    }
+    const poly &getKeyQ() const {
         return sec_key_q_;
     }
     poly &getKeyP() {
         return sec_key_p_;
     }
+    const poly &getKeyP() const {
+        return sec_key_p_;
+    }
+    deb::SecretKey &getDebSecKey() {
+        return deb_sk_;
+    }
+    const deb::SecretKey &getDebSecKey() const {
+        return deb_sk_;
+    }
 
     evi::ParameterPreset preset_;
-    deb::SecretKey deb_sk_;
-
-    s_poly sec_coeff_;
-    poly sec_key_q_;
-    poly sec_key_p_;
-
     bool sec_loaded_;
 
     std::optional<SealInfo> s_info_;
     std::optional<TEEWrapper> teew_;
+
+private:
+    void reset() noexcept;
+
+    std::unique_ptr<SecretMemoryPages> secret_mem_;
+    s_poly &sec_coeff_;
+    poly &sec_key_q_;
+    poly &sec_key_p_;
+    mutable std::mutex access_mtx_;
+    deb::SecretKey &deb_sk_;
+};
+
+class SecretKeyAccessScope {
+public:
+    explicit SecretKeyAccessScope(SecretKeyData &secret_key);
+    explicit SecretKeyAccessScope(const SecretKey &key);
+    explicit SecretKeyAccessScope(const std::shared_ptr<SecretKeyData> &key);
+    ~SecretKeyAccessScope();
+
+    SecretKeyAccessScope(const SecretKeyAccessScope &) = delete;
+    SecretKeyAccessScope &operator=(const SecretKeyAccessScope &) = delete;
+    SecretKeyAccessScope(SecretKeyAccessScope &&other) noexcept;
+    SecretKeyAccessScope &operator=(SecretKeyAccessScope &&other) noexcept;
+
+private:
+    std::shared_ptr<SecretKeyData> key_;
 };
 
 class SecretKey : public std::shared_ptr<SecretKeyData> {

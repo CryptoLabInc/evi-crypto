@@ -27,8 +27,9 @@
 class AES {
 public:
     static bool encryptAESGCM(const std::vector<uint8_t> &plaintext, const std::vector<uint8_t> &key,
-                              std::vector<uint8_t> &iv, std::vector<uint8_t> &ciphertext, std::vector<uint8_t> &tag);
+                              std::vector<uint8_t> &iv, std::vector<uint8_t> &ciphertext, std::vector<uint8_t> &tag,
+                              const std::vector<uint8_t> &aad = {});
     static bool decryptAESGCM(const std::vector<uint8_t> &ciphertext, const std::vector<uint8_t> &key,
                               const std::vector<uint8_t> &iv, std::vector<uint8_t> &plaintext,
-                              const std::vector<uint8_t> &tag);
+                              const std::vector<uint8_t> &tag, const std::vector<uint8_t> &aad = {});
 };

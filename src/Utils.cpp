@@ -18,9 +18,16 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
+#include <limits>
 #include <random>
 #include <set>
 #include <sstream>
@@ -29,30 +36,115 @@
 
 #include "EVI/Const.hpp"
 #include "EVI/Utils.hpp"
+#include "alea/alea.h"
+#include "alea/algorithms.h"
+#include "nlohmann/json.hpp"
 #include "utils/Utils.hpp"
 
 #include "EVI/Enums.hpp"
 #include "utils/Exceptions.hpp"
+#include "utils/Serialization.hpp"
+#include "utils/crypto/AES.hpp"
 #include <filesystem>
+#include <memory>
+#include <stdexcept>
 
 namespace evi {
 namespace detail {
 namespace fs = std::filesystem;
 
+namespace {
+constexpr char K_BASE64_ALPHABET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::array<uint8_t, 256> buildBase64DecodeTable() {
+    std::array<uint8_t, 256> table{};
+    table.fill(0xFF);
+    for (uint8_t i = 0; i < 64; ++i) {
+        table[static_cast<uint8_t>(K_BASE64_ALPHABET[i])] = i;
+    }
+    return table;
+}
+
+const std::array<uint8_t, 256> K_BASE64_DECODE_TABLE = buildBase64DecodeTable();
+
+inline bool isBase64Whitespace(unsigned char c) {
+    return c == '\n' || c == '\r' || c == '\t' || c == ' ';
+}
+
+nlohmann::ordered_json canonicalizeJson(const nlohmann::ordered_json &node) {
+    std::function<nlohmann::ordered_json(const nlohmann::ordered_json &)> normalize =
+        [&](const nlohmann::ordered_json &n) -> nlohmann::ordered_json {
+        if (n.is_object()) {
+            nlohmann::ordered_json canonical = nlohmann::ordered_json::object();
+            std::vector<std::string> keys;
+            keys.reserve(n.size());
+            for (auto it = n.cbegin(); it != n.cend(); ++it) {
+                keys.push_back(it.key());
+            }
+            std::sort(keys.begin(), keys.end());
+            for (const auto &key : keys) {
+                canonical[key] = normalize(n.at(key));
+            }
+            return canonical;
+        }
+        if (n.is_array()) {
+            nlohmann::ordered_json canonical = nlohmann::ordered_json::array();
+            for (const auto &element : n) {
+                canonical.push_back(normalize(element));
+            }
+            return canonical;
+        }
+        if (n.is_number_float()) {
+            const double val = n.get<double>();
+            if (val == 0.0 && std::signbit(val)) {
+                return nlohmann::ordered_json(0);
+            }
+            double int_part = 0.0;
+            if (std::modf(val, &int_part) == 0.0 && std::fabs(val) < static_cast<double>(1LL << 53)) {
+                return nlohmann::ordered_json(static_cast<int64_t>(val));
+            }
+        }
+        return n;
+    };
+    return normalize(node);
+}
+} // namespace
+
 std::string utils::encodeToBase64(const std::vector<uint8_t> &data) {
-    BIO *bio = BIO_new(BIO_s_mem());
-    BIO *b64 = BIO_new(BIO_f_base64());
-    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
-    bio = BIO_push(b64, bio);
+    if (data.empty()) {
+        return {};
+    }
 
-    BIO_write(bio, data.data(), static_cast<int>(data.size()));
-    BIO_flush(bio);
+    const std::size_t encoded_len = ((data.size() + 2) / 3) * 4;
+    std::string encoded;
+    encoded.reserve(encoded_len);
 
-    BUF_MEM *buffer_ptr;
-    BIO_get_mem_ptr(bio, &buffer_ptr);
+    std::size_t i = 0;
+    while (i + 2 < data.size()) {
+        const uint32_t triple = (static_cast<uint32_t>(data[i]) << 16) | (static_cast<uint32_t>(data[i + 1]) << 8) |
+                                static_cast<uint32_t>(data[i + 2]);
+        encoded.push_back(K_BASE64_ALPHABET[(triple >> 18) & 0x3F]);
+        encoded.push_back(K_BASE64_ALPHABET[(triple >> 12) & 0x3F]);
+        encoded.push_back(K_BASE64_ALPHABET[(triple >> 6) & 0x3F]);
+        encoded.push_back(K_BASE64_ALPHABET[triple & 0x3F]);
+        i += 3;
+    }
 
-    std::string encoded(buffer_ptr->data, buffer_ptr->length);
-    BIO_free_all(bio);
+    const std::size_t remaining = data.size() - i;
+    if (remaining == 1) {
+        const uint32_t triple = static_cast<uint32_t>(data[i]) << 16;
+        encoded.push_back(K_BASE64_ALPHABET[(triple >> 18) & 0x3F]);
+        encoded.push_back(K_BASE64_ALPHABET[(triple >> 12) & 0x3F]);
+        encoded.push_back('=');
+        encoded.push_back('=');
+    } else if (remaining == 2) {
+        const uint32_t triple = (static_cast<uint32_t>(data[i]) << 16) | (static_cast<uint32_t>(data[i + 1]) << 8);
+        encoded.push_back(K_BASE64_ALPHABET[(triple >> 18) & 0x3F]);
+        encoded.push_back(K_BASE64_ALPHABET[(triple >> 12) & 0x3F]);
+        encoded.push_back(K_BASE64_ALPHABET[(triple >> 6) & 0x3F]);
+        encoded.push_back('=');
+    }
+
     return encoded;
 }
 
@@ -62,24 +154,165 @@ std::string utils::encodeToBase64(const std::string &str) {
 }
 
 std::vector<uint8_t> utils::decodeBase64(const std::string &encoded) {
-    BIO *bio = BIO_new_mem_buf(encoded.data(), static_cast<int>(encoded.size()));
-    BIO *b64 = BIO_new(BIO_f_base64());
-    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
-    bio = BIO_push(b64, bio);
+    if (encoded.empty()) {
+        return {};
+    }
 
-    std::vector<uint8_t> decoded(encoded.size());
-    int decoded_len = BIO_read(bio, decoded.data(), static_cast<int>(decoded.size()));
-    BIO_free_all(bio);
+    std::vector<uint8_t> decoded;
+    decoded.reserve((encoded.size() / 4) * 3);
 
-    if (decoded_len < 0) {
+    uint8_t block[4];
+    std::size_t block_len = 0;
+
+    auto decode_block = [&](const uint8_t *b) {
+        const bool pad2 = b[2] == '=';
+        const bool pad3 = b[3] == '=';
+        const uint32_t v0 = K_BASE64_DECODE_TABLE[b[0]];
+        const uint32_t v1 = K_BASE64_DECODE_TABLE[b[1]];
+        if (v0 == 0xFF || v1 == 0xFF) {
+            throw std::runtime_error("Base64 decoding failed");
+        }
+
+        uint32_t v2 = 0;
+        uint32_t v3 = 0;
+        if (!pad2) {
+            v2 = K_BASE64_DECODE_TABLE[b[2]];
+            if (v2 == 0xFF) {
+                throw std::runtime_error("Base64 decoding failed");
+            }
+        }
+        if (!pad3) {
+            v3 = K_BASE64_DECODE_TABLE[b[3]];
+            if (v3 == 0xFF) {
+                throw std::runtime_error("Base64 decoding failed");
+            }
+        }
+
+        const uint32_t triple = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3;
+        decoded.push_back(static_cast<uint8_t>((triple >> 16) & 0xFF));
+        if (!pad2) {
+            decoded.push_back(static_cast<uint8_t>((triple >> 8) & 0xFF));
+        }
+        if (!pad3) {
+            decoded.push_back(static_cast<uint8_t>(triple & 0xFF));
+        }
+    };
+
+    for (unsigned char c : encoded) {
+        if (isBase64Whitespace(c)) {
+            continue;
+        }
+        block[block_len++] = c;
+        if (block_len == 4) {
+            decode_block(block);
+            block_len = 0;
+        }
+    }
+
+    if (block_len != 0) {
         throw std::runtime_error("Base64 decoding failed");
     }
 
-    decoded.resize(decoded_len);
     return decoded;
 }
 
+std::string utils::timePointToIso8601UtcString(std::chrono::system_clock::time_point tp) {
+    const std::time_t raw = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm{};
+#ifdef _MSC_VER
+    gmtime_s(&tm, &raw);
+#else
+    gmtime_r(&raw, &tm);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    return oss.str();
+}
+
+std::chrono::system_clock::time_point utils::iso8601UtcStringToTimePoint(const std::string &ts) {
+    std::tm tm{};
+    std::istringstream iss(ts);
+    iss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    if (iss.fail() || iss.peek() != std::char_traits<char>::eof()) {
+        throw evi::InvalidInputError("Invalid timestamp format: '" + ts + "'");
+    }
+#ifdef _MSC_VER
+    const std::time_t raw = _mkgmtime(&tm);
+#else
+    const std::time_t raw = timegm(&tm);
+#endif
+    if (raw == static_cast<std::time_t>(-1)) {
+        throw evi::InvalidInputError("Failed to parse timestamp: '" + ts + "'");
+    }
+    return std::chrono::system_clock::from_time_t(raw);
+}
+
+std::string utils::currentIso8601UtcString() {
+    return timePointToIso8601UtcString(std::chrono::system_clock::now());
+}
+
+bool utils::isEnvelopeJson(const nlohmann::json &parsed) {
+    if (!parsed.is_object()) {
+        return false;
+    }
+    const auto entries_it = parsed.find("entries");
+    if (entries_it == parsed.end() || !entries_it->is_array() || entries_it->empty()) {
+        return false;
+    }
+    const auto kid_it = parsed.find("kid");
+    return kid_it != parsed.end() && kid_it->is_string();
+}
+
+std::string utils::encryptMetadata(const std::string &metadata, const std::vector<uint8_t> &key,
+                                   const std::vector<uint8_t> &aad) {
+    if (key.size() != static_cast<std::size_t>(evi::detail::AES256_KEY_SIZE)) {
+        throw InvalidInputError("metadata key must be 32 bytes (AES-256)");
+    }
+    const std::vector<uint8_t> plaintext(metadata.begin(), metadata.end());
+
+    std::vector<uint8_t> iv;
+    std::vector<uint8_t> ciphertext;
+    std::vector<uint8_t> tag;
+    if (!AES::encryptAESGCM(plaintext, key, iv, ciphertext, tag, aad)) {
+        throw EncryptionError("failed to encrypt metadata with AES-256-GCM");
+    }
+
+    return nlohmann::json{
+        {"iv", encodeToBase64(iv)}, {"tag", encodeToBase64(tag)}, {"encrypted_data", encodeToBase64(ciphertext)}}
+        .dump();
+}
+
+std::string utils::decryptMetadata(const std::string &encrypted, const std::vector<uint8_t> &key,
+                                   const std::vector<uint8_t> &aad) {
+    if (key.size() != static_cast<std::size_t>(evi::detail::AES256_KEY_SIZE)) {
+        throw InvalidInputError("metadata decryption key must be 32 bytes (AES-256)");
+    }
+    const nlohmann::json encrypted_json = nlohmann::json::parse(encrypted);
+    if (!encrypted_json.is_object()) {
+        throw InvalidInputError("encrypted metadata must be a JSON object");
+    }
+    if (!encrypted_json.contains("iv") || !encrypted_json.contains("tag") ||
+        !encrypted_json.contains("encrypted_data")) {
+        throw InvalidInputError("encrypted metadata must contain iv, tag, and encrypted_data");
+    }
+
+    const std::string iv_b64 = encrypted_json.at("iv").get<std::string>();
+    const std::string tag_b64 = encrypted_json.at("tag").get<std::string>();
+    const std::string data_b64 = encrypted_json.at("encrypted_data").get<std::string>();
+
+    const std::vector<uint8_t> iv = decodeBase64(iv_b64);
+    const std::vector<uint8_t> tag = decodeBase64(tag_b64);
+    const std::vector<uint8_t> ciphertext = decodeBase64(data_b64);
+
+    std::vector<uint8_t> plaintext;
+    if (!AES::decryptAESGCM(ciphertext, key, iv, plaintext, tag, aad)) {
+        throw EncryptionError("failed to decrypt metadata with AES-256-GCM");
+    }
+    return std::string(plaintext.begin(), plaintext.end());
+}
+
 void utils::serializeQueryTo(const Query &query, std::ostream &os) {
+    serialization::writeHeader(os, serialization::kVersionV1);
     QueryType query_type = QueryType::SINGLE;
     uint8_t query_type_raw = static_cast<uint8_t>(query_type);
     os.write(reinterpret_cast<const char *>(&query_type_raw), sizeof(query_type_raw));
@@ -100,6 +333,11 @@ void utils::serializeQueryTo(const Query &query, std::ostream &os) {
 }
 
 Query utils::deserializeQueryFrom(std::istream &is) {
+    auto header = serialization::readHeader(is);
+    if (header.has_header && header.version != serialization::kVersionV1) {
+        throw NotSupportedError("Unsupported query serialization version");
+    }
+
     uint8_t query_type_raw = 0;
     is.read(reinterpret_cast<char *>(&query_type_raw), sizeof(query_type_raw));
 
@@ -132,6 +370,7 @@ Query utils::deserializeQueryFrom(std::istream &is) {
 }
 
 void utils::serializeResultTo(const SearchResult &res, std::ostream &os) {
+    serialization::writeHeader(os, serialization::kVersionV1);
     uint8_t tag = 0;
     os.write(reinterpret_cast<const char *>(&tag), sizeof(tag));
 
@@ -149,6 +388,11 @@ void utils::serializeResultTo(const SearchResult &res, std::ostream &os) {
 }
 
 SearchResult utils::deserializeResultFrom(std::istream &is) {
+    auto header = serialization::readHeader(is);
+    if (header.has_header && header.version != serialization::kVersionV1) {
+        throw NotSupportedError("Unsupported result serialization version");
+    }
+
     uint8_t tag = 0;
     is.read(reinterpret_cast<char *>(&tag), sizeof(tag));
 
@@ -181,11 +425,39 @@ SealMode utils::stringToSealMode(const std::string &str) {
     return SealMode::NONE;
 }
 
+EvalMode utils::stringToEvalMode(const std::string &str) {
+    if (str == "RMP") {
+        return EvalMode::RMP;
+    } else if (str == "RMS") {
+        return EvalMode::RMS;
+    } else if (str == "MS") {
+        return EvalMode::MS;
+    } else if (str == "FLAT") {
+        return EvalMode::FLAT;
+    } else if (str == "MM") {
+        return EvalMode::MM;
+    } else if (str == "MMS") {
+        return EvalMode::MMS;
+    } else if (str == "MM32") {
+        return EvalMode::MM32;
+    } else if (str == "MMS32") {
+        return EvalMode::MMS32;
+    } else if (str == "SINGLE") {
+        return EvalMode::SINGLE;
+    } else {
+        throw InvalidInputError("Invalid eval mode name : " + str);
+    }
+}
+
 ParameterPreset utils::stringToPreset(const std::string &str) {
     if (str == "IP0") {
         return ParameterPreset::IP0;
     } else if (str == "IP1") {
         return ParameterPreset::IP1;
+    } else if (str == "IP2") {
+        return ParameterPreset::IP2;
+    } else if (str == "IP3") {
+        return ParameterPreset::IP3;
     } else if (str == "QF0") {
         return ParameterPreset::QF0;
     } else if (str == "QF1") {
@@ -202,6 +474,12 @@ std::string utils::assignParameterString(evi::ParameterPreset preset) {
     }
     case evi::ParameterPreset::IP1: {
         return "IP1";
+    }
+    case evi::ParameterPreset::IP2: {
+        return "IP2";
+    }
+    case evi::ParameterPreset::IP3: {
+        return "IP3";
     }
     case evi::ParameterPreset::QF1: {
         return "QF1";
@@ -231,6 +509,15 @@ std::string utils::assignEvalModeString(evi::EvalMode mode) {
     case evi::EvalMode::MM: {
         return "MM";
     }
+    case evi::EvalMode::MMS: {
+        return "MMS";
+    }
+    case evi::EvalMode::MM32: {
+        return "MM32";
+    }
+    case evi::EvalMode::MMS32: {
+        return "MMS32";
+    }
     default:
         return "NULL";
     }
@@ -259,6 +546,8 @@ void utils::serializeString(const std::string &str, std::ostream &out) {
 // Serialize the directory structure into an ostringstream
 void utils::serializeEvalKey(const std::string &key_dir_path, const std::string &out_file_path) {
     std::ofstream out(out_file_path, std::ios::binary);
+    serialization::writeHeader(out, serialization::kVersionV1);
+    std::vector<fs::path> serialized_files;
     for (const auto &entry : fs::recursive_directory_iterator(key_dir_path)) {
         std::string relative_path = fs::relative(entry.path(), key_dir_path).string();
 
@@ -296,8 +585,11 @@ void utils::serializeEvalKey(const std::string &key_dir_path, const std::string 
             out.write(content.data(), content.size()); // Write file contents
 
             in_file.close();
-            fs::remove(entry.path());
+            serialized_files.push_back(entry.path());
         }
+    }
+    for (const auto &file : serialized_files) {
+        fs::remove(file);
     }
     for (auto it = fs::recursive_directory_iterator(key_dir_path, fs::directory_options::skip_permission_denied),
               end = fs::recursive_directory_iterator();
@@ -329,6 +621,10 @@ void utils::deserializeEvalKey(const std::string &key_file_path, const std::stri
     }
 
     std::ifstream in(key_file_path, std::ios::binary);
+    auto header = serialization::readHeader(in);
+    if (header.has_header && header.version != serialization::kVersionV1) {
+        throw NotSupportedError("Unsupported eval key serialization version");
+    }
     while (in.peek() != EOF) {
         char type;
         in.read(&type, sizeof(type)); // Read type ('D' or 'F')
@@ -480,11 +776,60 @@ void Utils::deserializeKeyFiles(std::istream &in, SecretKey &seckey, KeyPack &ke
     detail::utils::deserializeKeyFiles(in, *sec_impl, kp_impl);
 }
 
+std::string Utils::encryptMetadata(const std::string &metadata, const std::vector<uint8_t> &key,
+                                   const std::vector<uint8_t> &aad) {
+    return detail::utils::encryptMetadata(metadata, key, aad);
+}
+
+std::string Utils::decryptMetadata(const std::string &encrypted, const std::vector<uint8_t> &key,
+                                   const std::vector<uint8_t> &aad) {
+    return detail::utils::decryptMetadata(encrypted, key, aad);
+}
+
 SealMode Utils::stringToSealMode(const std::string &s) {
     return detail::utils::stringToSealMode(s);
 }
 
 ParameterPreset Utils::stringToPreset(const std::string &s) {
     return detail::utils::stringToPreset(s);
+}
+
+EvalMode Utils::stringToEvalMode(const std::string &s) {
+    return detail::utils::stringToEvalMode(s);
+}
+
+std::vector<uint8_t> Utils::generateRandomBytes(std::size_t size, const std::optional<std::vector<uint8_t>> &seed) {
+    if (size == 0) {
+        return {};
+    }
+
+    std::vector<uint8_t> alea_seed;
+    if (seed.has_value()) {
+        if (seed->size() < static_cast<std::size_t>(SEED_MIN_SIZE)) {
+            throw std::invalid_argument("seed size must be at least SEED_MIN_SIZE bytes");
+        }
+        alea_seed = *seed;
+    } else {
+        alea_seed.resize(SEED_MIN_SIZE);
+        std::random_device rd;
+        for (std::size_t i = 0; i < alea_seed.size(); i += sizeof(uint32_t)) {
+            const uint32_t val = rd();
+            const std::size_t copy_size = std::min(sizeof(uint32_t), alea_seed.size() - i);
+            std::memcpy(alea_seed.data() + i, &val, copy_size);
+        }
+    }
+
+    std::shared_ptr<alea_state> as(alea_init(alea_seed.data(), ALEA_ALGORITHM_SHAKE256), [](alea_state *p) {
+        if (p != nullptr) {
+            alea_free(p);
+        }
+    });
+    if (as == nullptr) {
+        throw std::runtime_error("failed to initialize alea state");
+    }
+
+    std::vector<uint8_t> out(size, 0);
+    alea_get_random_bytes(as.get(), out.data(), out.size());
+    return out;
 }
 } // namespace evi

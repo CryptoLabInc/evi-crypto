@@ -19,78 +19,15 @@
 #pragma once
 
 #include "EVI/impl/Type.hpp"
-#include <limits>
+#include <cstring>
+
 #define CONSTEXPR_INLINE constexpr inline
 
 namespace evi {
 
 namespace detail {
-#if defined(_MSC_VER) && !defined(__clang__)
-CONSTEXPR_INLINE u128 u128Base() {
-    return u128(U64C(1), U64C(0));
-}
-
 CONSTEXPR_INLINE u64 u128Hi(const u128 value) {
-    return value.hi;
-};
-CONSTEXPR_INLINE u64 u128Lo(const u128 value) {
-    return value.lo;
-};
-
-CONSTEXPR_INLINE u128 mul64To128(const u64 op1, const u64 op2) {
-    const u64 op1_lo = static_cast<u32>(op1);
-    const u64 op1_hi = op1 >> 32;
-    const u64 op2_lo = static_cast<u32>(op2);
-    const u64 op2_hi = op2 >> 32;
-
-    const u64 prod_lo_lo = op1_lo * op2_lo;
-    const u64 prod_lo_hi = op1_lo * op2_hi;
-    const u64 prod_hi_lo = op1_hi * op2_lo;
-    const u64 prod_hi_hi = op1_hi * op2_hi;
-
-    const u64 carry = (prod_lo_lo >> 32) + static_cast<u32>(prod_lo_hi) + static_cast<u32>(prod_hi_lo);
-    const u64 lo = (carry << 32) | static_cast<u32>(prod_lo_lo);
-    const u64 hi = prod_hi_hi + (prod_lo_hi >> 32) + (prod_hi_lo >> 32) + (carry >> 32);
-    return u128(hi, lo);
-}
-
-CONSTEXPR_INLINE u64 mul64To128Hi(const u64 op1, const u64 op2) {
-    u128 mul = mul64To128(op1, op2);
-    return u128Hi(mul);
-}
-
-CONSTEXPR_INLINE u64 divide128By64Lo(const u64 op1_hi, const u64 op1_lo, const u64 op2) {
-    u64 remainder = op1_hi % op2;
-    u64 quotient = 0;
-    for (int bit = 63; bit >= 0; --bit) {
-        quotient <<= 1;
-        remainder = (remainder << 1) | ((op1_lo >> bit) & U64C(1));
-        if (remainder >= op2) {
-            remainder -= op2;
-            quotient |= U64C(1);
-        }
-    }
-    return quotient;
-}
-
-CONSTEXPR_INLINE u64 mulModSimple(const u64 op1, const u64 op2, const u64 mod) {
-    const u128 mul = mul64To128(op1, op2);
-    u64 remainder = u128Hi(mul) % mod;
-    for (int bit = 63; bit >= 0; --bit) {
-        remainder = (remainder << 1) | ((u128Lo(mul) >> bit) & U64C(1));
-        if (remainder >= mod) {
-            remainder -= mod;
-        }
-    }
-    return remainder;
-}
-#else
-CONSTEXPR_INLINE u128 u128Base() {
-    return static_cast<u128>(std::numeric_limits<u64>::max()) + 1;
-}
-
-CONSTEXPR_INLINE u64 u128Hi(const u128 value) {
-    return static_cast<u64>(value / u128Base());
+    return static_cast<u64>(value >> 64);
 };
 CONSTEXPR_INLINE u64 u128Lo(const u128 value) {
     return static_cast<u64>(value);
@@ -106,13 +43,12 @@ CONSTEXPR_INLINE u64 mul64To128Hi(const u64 op1, const u64 op2) {
 }
 
 CONSTEXPR_INLINE u64 divide128By64Lo(const u64 op1_hi, const u64 op1_lo, const u64 op2) {
-    return static_cast<u64>(((static_cast<u128>(op1_hi) * u128Base()) + static_cast<u128>(op1_lo)) / op2);
+    return static_cast<u64>(((static_cast<u128>(op1_hi) << 64) | static_cast<u128>(op1_lo)) / op2);
 }
 
 CONSTEXPR_INLINE u64 mulModSimple(const u64 op1, const u64 op2, const u64 mod) {
     return static_cast<u64>(mul64To128(op1, op2) % mod);
 }
-#endif
 
 CONSTEXPR_INLINE u64 powModSimple(u64 base, u64 expo, const u64 mod) {
     u64 res = 1;
@@ -202,7 +138,13 @@ CONSTEXPR_INLINE u32 bitReverse(u32 x, u64 max_digits) {
 }
 
 CONSTEXPR_INLINE u64 countLeftZeroes(u64 op) {
-    // Algorithm: see "Hacker's delight" 2nd ed., section 5.13, algorithm 5-12.
+#ifndef __has_builtin
+#define __has_builtin(arg) 0
+#endif
+#if __has_builtin(__builtin_clzll)
+    return static_cast<u64>(__builtin_clzll(op));
+#else
+    // Software fallback (constexpr-compatible on MSVC and others).
     u64 n = 64;
     u64 tmp = op >> 32;
     if (tmp != 0) {
@@ -233,6 +175,7 @@ CONSTEXPR_INLINE u64 countLeftZeroes(u64 op) {
     if (tmp != 0)
         return n - 2;
     return n - op;
+#endif
 }
 
 CONSTEXPR_INLINE u64 bitWidth(const u64 op) {
@@ -280,9 +223,29 @@ CONSTEXPR_INLINE u64 selectIfCondU64(bool cond, u64 a, u64 b) {
     return (a & -tmp) + (b & ~(-tmp));
 }
 
-CONSTEXPR_INLINE double signBiasDouble(i64 val) {
+CONSTEXPR_INLINE double signBiasDoubleFromI64(i64 val) {
     // val > 0 ? 0.5 : -0.5;
-    return 0.5 - (static_cast<double>((val <= 0) << 1));
+    return 0.5 - static_cast<double>(val <= 0);
+}
+
+#ifdef __CUDA_ARCH__
+__host__ __device__ inline double signBiasDoubleFromFloatGPU(float val) {
+    return 0.5 - static_cast<double>(__float_as_uint(val) >> 31);
+}
+#endif
+
+inline double signBiasDoubleFromFloatCPU(float val) {
+    uint32_t bits = 0;
+    memcpy(&bits, &val, sizeof(bits));
+    return 0.5 - static_cast<double>((bits >> 31));
+}
+
+inline double signBiasDoubleFromFloat(float val) {
+#ifdef __CUDA_ARCH__
+    return signBiasDoubleFromFloatGPU(val);
+#else
+    return signBiasDoubleFromFloatCPU(val);
+#endif
 }
 
 CONSTEXPR_INLINE i64 subIfGEModI64(i64 val, i64 mod) {
@@ -290,12 +253,14 @@ CONSTEXPR_INLINE i64 subIfGEModI64(i64 val, i64 mod) {
     return val - (mod & -static_cast<i64>(val >= mod));
 }
 
-#ifndef _MSC_VER
 CONSTEXPR_INLINE i128 absI128(i128 val) {
-    // val >= 0 ? val : -val
+#ifdef _MSC_VER
+    return val >= i128(0) ? val : -val;
+#else
+    // Branchless: val >= 0 ? val : -val
     i128 sign = val >> 127;
     return (val + sign) ^ sign;
-}
 #endif
+}
 } // namespace detail
 } // namespace evi

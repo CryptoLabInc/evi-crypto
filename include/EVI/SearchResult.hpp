@@ -18,7 +18,6 @@
 
 #pragma once
 #include "EVI/Export.hpp"
-#include <cstdint>
 #include <istream>
 #include <memory>
 #include <optional>
@@ -35,8 +34,7 @@ class SearchResult;
  * @brief Represents the encrypted result of a search operation.
  *
  * A `SearchResult` holds the encrypted data returned from a homomorphic
- * search. To interpret the result, it must be decrypted
- * using a `Decryptor` and a valid `SecretKey`.
+ * search. To interpret the result, decrypt it using a `Decryptor` and a valid `SecretKey`.
  */
 class EVI_API SearchResult {
 public:
