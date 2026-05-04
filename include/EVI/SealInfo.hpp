@@ -35,7 +35,7 @@ constexpr int AES_GCM_IV_SIZE = 12;
 constexpr int AES_GCM_TAG_SIZE = 16;
 
 namespace detail {
-class SealInfo;
+struct SealInfo;
 }
 
 /**
