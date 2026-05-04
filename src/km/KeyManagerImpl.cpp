@@ -87,7 +87,11 @@ KeyV1Requester makeRequester() {
 std::string makeIso8601(std::chrono::system_clock::time_point tp) {
     std::time_t t_c = std::chrono::system_clock::to_time_t(tp);
     std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s(&tm, &t_c);
+#else
     gmtime_r(&t_c, &tm);
+#endif
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
     return oss.str();

@@ -37,6 +37,29 @@
 namespace evi {
 namespace detail {
 
+namespace {
+
+struct EncodedMagnitude {
+    bool is_positive;
+    u128 magnitude;
+};
+
+EncodedMagnitude encodeScaledMagnitude(double value) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    const auto rounded = static_cast<i64>(value + (value > 0 ? 0.5 : -0.5));
+    const bool is_positive = rounded >= 0;
+    const u64 magnitude = is_positive ? static_cast<u64>(rounded) : static_cast<u64>(-(rounded + 1)) + 1;
+    return {is_positive, u128(magnitude)};
+#else
+    i128 temp = static_cast<i128>(value + (value > 0 ? 0.5 : -0.5));
+    const bool is_positive = temp >= 0;
+    temp = absI128(temp);
+    return {is_positive, static_cast<u128>(temp)};
+#endif
+}
+
+} // namespace
+
 template <EvalMode M>
 EncryptorImpl<M>::EncryptorImpl(const Context &context, const std::optional<std::vector<u8>> &seed)
     : context_(context), sampler_(context, seed),
@@ -203,14 +226,12 @@ Query EncryptorImpl<M>::encrypt(const span<float> msg, const MultiSecretKey &sec
         double delta = scale.value_or(std::pow(2.0, context_->getParam()->getScaleFactor()));
         sampler_.sampleGaussian(ctxt_b_q);
         for (u64 i = 0; i < item_per_ciphertext; ++i) {
-            i128 temp = static_cast<i128>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
-            bool is_positive = temp >= 0;
-            temp = is_positive ? temp : -temp;
+            const auto encoded = encodeScaledMagnitude(tmp_msg[i] * delta);
 
             u64 value_q = reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
                                         context_->getParam()->getTwoTo64Q(), context_->getParam()->getTwoTo64ShoupQ(),
-                                        context_->getParam()->getBarrRatioQ(), static_cast<u128>(temp));
-            ctxt_b_q[i] += (is_positive ? value_q : (context_->getParam()->getPrimeQ() - value_q));
+                                        context_->getParam()->getBarrRatioQ(), encoded.magnitude);
+            ctxt_b_q[i] += (encoded.is_positive ? value_q : (context_->getParam()->getPrimeQ() - value_q));
             if (ctxt_b_q[i] >= context_->getParam()->getPrimeQ()) {
                 ctxt_b_q[i] -= context_->getParam()->getPrimeQ();
             }
@@ -633,15 +654,13 @@ Query EncryptorImpl<M>::encode(const span<float> msg, const EncodeType type, con
             poly plaintext_q{};
 
             for (u64 i = 0; i < tmp_rank; ++i) {
-                i128 temp = static_cast<i128>(tmp_msg[i] * delta + (tmp_msg[i] > 0 ? 0.5 : -0.5));
-                bool is_positive = temp >= 0;
-                temp = is_positive ? temp : -temp;
+                const auto encoded = encodeScaledMagnitude(tmp_msg[i] * delta);
 
                 u64 value_q =
                     reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
                                   context_->getParam()->getTwoTo64Q(), context_->getParam()->getTwoTo64ShoupQ(),
-                                  context_->getParam()->getBarrRatioQ(), static_cast<u128>(temp));
-                plaintext_q[i] = is_positive ? value_q : (context_->getParam()->getPrimeQ() - value_q);
+                                  context_->getParam()->getBarrRatioQ(), encoded.magnitude);
+                plaintext_q[i] = encoded.is_positive ? value_q : (context_->getParam()->getPrimeQ() - value_q);
             }
             context_->nttModQMini(plaintext_q, tmp_rank);
             polyvec128 tmp(plaintext_q.begin(), plaintext_q.end());
@@ -683,20 +702,19 @@ Query::SingleQuery EncryptorImpl<M>::innerEncode(const span<float> &msg, const b
 
     u64 num_iter = msg_size.value_or(DEGREE);
     for (u64 i = 0; i < num_iter; ++i) {
-        i128 temp = static_cast<i128>(msg[i] * scale + signBiasDouble(msg[i]));
-        i64 is_positive = temp >= 0;
-        temp = absI128(temp);
+        const auto encoded = encodeScaledMagnitude(msg[i] * scale);
 
         u64 value_q = reduceBarrett(context_->getParam()->getPrimeQ(), context_->getParam()->getTwoPrimeQ(),
                                     context_->getParam()->getTwoTo64Q(), context_->getParam()->getTwoTo64ShoupQ(),
-                                    context_->getParam()->getBarrRatioQ(), static_cast<u128>(temp));
-        plaintext_q[i] = selectIfCondU64(is_positive, value_q, context_->getParam()->getPrimeQ() - value_q);
+                                    context_->getParam()->getBarrRatioQ(), encoded.magnitude);
+        plaintext_q[i] = selectIfCondU64(encoded.is_positive, value_q, context_->getParam()->getPrimeQ() - value_q);
 
         if (level) {
             u64 value_p = reduceBarrett(context_->getParam()->getPrimeP(), context_->getParam()->getTwoPrimeP(),
                                         context_->getParam()->getTwoTo64P(), context_->getParam()->getTwoTo64ShoupP(),
-                                        context_->getParam()->getBarrRatioP(), static_cast<u128>(temp));
-            plaintext_p.value()[i] = selectIfCondU64(is_positive, value_p, context_->getParam()->getPrimeP() - value_p);
+                                        context_->getParam()->getBarrRatioP(), encoded.magnitude);
+            plaintext_p.value()[i] =
+                selectIfCondU64(encoded.is_positive, value_p, context_->getParam()->getPrimeP() - value_p);
         }
     }
 
