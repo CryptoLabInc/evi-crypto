@@ -29,7 +29,8 @@
 namespace evi {
 namespace detail {
 class Query;
-}
+class IQuery;
+} // namespace detail
 
 /**
  * @class Query
@@ -63,7 +64,7 @@ public:
 
     /**
      * @brief Returns the inner single query item count.
-     * @return The innter item count.
+     * @return The inner item count.
      */
     uint32_t getInnerItemCount() const;
 
@@ -74,8 +75,9 @@ public:
     std::size_t size() const;
 
     /**
-     * @brief Returns the number of items in the inner single query.
-     * @return The inner item count.
+     * @brief Reads a Query from a binary stream.
+     * @param is Input stream containing serialized query data.
+     * @return Deserialized Query.
      */
     static Query deserializeFrom(std::istream &is);
 

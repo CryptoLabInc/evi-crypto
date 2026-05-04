@@ -27,18 +27,19 @@ namespace evi {
 
 namespace detail {
 class IKeyPack;
-}
+struct VariadicKeyType;
+} // namespace detail
 
 /**
  * @class KeyPack
- * @brief A container for storing and managing public evaluation keys (e.g., encryption, evaluation, relin keys).
+ * @brief A container for storing and managing public evaluation keys (e.g., encryption, evaluation).
  *
  * The `KeyPack` class encapsulates all keys required for encrypted computation, excluding the secret key.
  * It is typically generated from a secret key and later used for encryption and evaluation.
  */
 class EVI_API KeyPack {
 public:
-    /// @brief Default constructor is deleted. Use `makeKeyPack` factory functions instead.
+    /// @brief Default constructor is deleted. Use `makeKeyPack()` factory functions instead.
     KeyPack() = delete;
 
     /**
@@ -73,7 +74,7 @@ public:
 
     /**
      * @brief Save the evaluation key to a file.
-     * @param dir_path Path to the directory for storing the evaluation key.
+     * @param dir_path Path to the directory for storing the evaluation key file.
      */
     void saveEvalKey(const std::string &dir_path);
 
@@ -113,7 +114,7 @@ private:
 EVI_API KeyPack makeKeyPack(const evi::Context &context);
 
 /**
- * @brief Creates a KeyPack by loading key data from an input stream.
+ * @brief Creates a `KeyPack` by loading key data from an input stream.
  *
  * @param context Context used for key initialization and device selection.
  * @param in Input stream containing the serialized key data.
@@ -122,7 +123,7 @@ EVI_API KeyPack makeKeyPack(const evi::Context &context);
 EVI_API KeyPack makeKeyPack(const evi::Context &context, std::istream &in);
 
 /**
- * @brief Creates a KeyPack by loading key data from a directory.
+ * @brief Creates a `KeyPack` by loading key data from a directory.
  *
  * @param context Context used for key initialization and device selection.
  * @param dir_path Path to the directory containing the key files.

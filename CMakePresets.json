@@ -56,7 +56,9 @@
         "BUILD_WITH_VALGRIND": "OFF",
         "BUILD_AS_STATIC": "ON",
         "ENABLE_IVF": "OFF",
-        "BUILD_C_API": "ON"
+        "BUILD_C_API": "ON",
+        "EVI_KM_PREFER_AWS_SDK": "OFF",
+        "EVI_KM_PREFER_GCP_SDK": "OFF"
       }
     },
     {
@@ -76,7 +78,9 @@
         "BUILD_WITH_VALGRIND": "OFF",
         "BUILD_AS_STATIC": "ON",
         "ENABLE_IVF": "OFF",
-        "BUILD_C_API": "ON"
+        "BUILD_C_API": "ON",
+        "EVI_KM_PREFER_AWS_SDK": "OFF",
+        "EVI_KM_PREFER_GCP_SDK": "OFF"
       }
     },
     {
@@ -92,7 +96,7 @@
       "installDir": "${sourceDir}/build/install",
       "cacheVariables": {
         "BUILD_TEST": "ON",
-        "BUILD_WITH_VALGRIND": "OFF"
+        "BUILD_WITH_VALGRIND": "ON"
       }
     },
     {
@@ -101,6 +105,36 @@
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_C_COMPILER": "clang"
+      }
+    },
+    {
+      "name": "client-windows",
+      "displayName": "Build python on Windows (MSVC x64)",
+      "inherits": "client",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "binaryDir": "${sourceDir}/build-win",
+      "cacheVariables": {
+        "BUILD_KEY_MANAGEMENT": "OFF"
+      }
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows MSVC Release",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "binaryDir": "${sourceDir}/build-win",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_PYTHON": "ON",
+        "BUILD_KEY_MANAGEMENT": "OFF",
+        "BUILD_AS_STATIC": "OFF"
       }
     }
   ],

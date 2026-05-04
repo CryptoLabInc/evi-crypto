@@ -1,0 +1,4 @@
+source_repository: CryptoLabInc/evi
+source_commit: 82e9306c49d807f589b02f54fda2e2ffeab831e5
+source_tag: v1.0.1
+publish_run_url: https://github.com/CryptoLabInc/evi/actions/runs/25307417137

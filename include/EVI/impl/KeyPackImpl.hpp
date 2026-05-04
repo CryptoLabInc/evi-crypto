@@ -44,6 +44,8 @@ namespace fs = std::filesystem;
 
 namespace detail {
 
+class KeySwitcher;
+
 class IKeyPack {
 public:
     virtual ~IKeyPack() = default;
@@ -93,6 +95,8 @@ public:
 
     void save(const std::string &path);
 
+    std::shared_ptr<KeySwitcher> getKeySwitcher(evi::DeviceType device_type = evi::DeviceType::CPU);
+
     FixedKeyType enckey;
     FixedKeyType relin_key;
     deb::SwitchKey deb_enc_key;
@@ -104,6 +108,7 @@ public:
     VariadicKeyType switch_key;
     VariadicKeyType shared_a_key;
     VariadicKeyType reverse_switch_key;
+    std::vector<VariadicKeyType> key_switching_key;
     std::vector<VariadicKeyType> additive_shared_a_key;
     deb::SwitchKey deb_mod_pack_key;
 
@@ -114,6 +119,10 @@ public:
     bool cc_shared_a_mod_pack_loaded_;
     bool enc_loaded_;
     bool eval_loaded_;
+    bool keyswitcher_cpu_loaded_;
+    bool keyswitcher_gpu_loaded_;
+    std::shared_ptr<KeySwitcher> keyswitcher_cpu_;
+    std::shared_ptr<KeySwitcher> keyswitcher_gpu_;
 
 private:
     const evi::detail::Context context_;

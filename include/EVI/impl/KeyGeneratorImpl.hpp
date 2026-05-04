@@ -57,6 +57,7 @@ public:
     virtual void genCCSharedAModPackKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) = 0;
     virtual std::vector<SecretKey> genMultiSecKey() = 0;
     virtual void genSwitchKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) = 0;
+    virtual void genSwitchingKeys(const SecretKey &sec_key) = 0;
 };
 
 template <EvalMode M>
@@ -89,6 +90,7 @@ private:
     void genSecKeyFromCoeff(SecretKey &sec_key, const int *sec_coeff);
     void genSwitchingKey(const SecretKey &sec_key, span<u64> from_s, span<u64> out_a_q, span<u64> out_a_p,
                          span<u64> out_b_q, span<u64> out_b_p);
+    void genSwitchingKeys(const SecretKey &sec_key);
     const Context context_;
     deb::KeyGenerator deb_keygen_;
 

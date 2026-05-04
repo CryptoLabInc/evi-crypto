@@ -24,7 +24,7 @@ cpmaddpackage(
   GITHUB_REPOSITORY
   google/googletest
   GIT_TAG
-  release-1.12.1
+  release-1.11.0
   OPTIONS
   "INSTALL_GTEST OFF"
   "BUILD_GMOCK OFF")
@@ -45,6 +45,4 @@ evi_add_test(ContextTest ContextTest.cpp utils.cpp)
 
 evi_add_test(KeyValidationTest KeyValidationTest.cpp utils.cpp)
 
-if(BUILD_KEY_MANAGEMENT)
-  evi_add_test(KeyManagementTest KeyManagementTest.cpp)
-endif()
+evi_add_test(KeyManagementTest KeyManagementTest.cpp)

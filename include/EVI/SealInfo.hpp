@@ -29,17 +29,18 @@ namespace evi {
 
 /// @brief AES-256 key size in bytes.
 constexpr int AES256_KEY_SIZE = 32;
+/// @brief AES-GCM IV size in bytes.
 constexpr int AES_GCM_IV_SIZE = 12;
+/// @brief AES-GCM authentication tag size in bytes.
 constexpr int AES_GCM_TAG_SIZE = 16;
 
 namespace detail {
-struct SealInfo;
+class SealInfo;
 }
 
 /**
  * @class SealInfo
- * @brief Encapsulates sealing configuration used to protect secret keys in in homomorphic encryption schemes during
- * storage.
+ * @brief Encapsulates sealing configuration used to protect secret keys during storage.
  *
  * The `SealInfo` class holds information related to how a secret key (e.g., `SecretKey`) should be sealed
  * before being saved externally. Supported sealing modes include no sealing and AES-256 key wrapping.

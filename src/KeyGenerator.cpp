@@ -39,8 +39,9 @@ SecretKey KeyGenerator::genSecKey() {
     return sk_ptr;
 }
 
-void KeyGenerator::genPubKeys(SecretKey &sec_key) {
+KeyPack KeyGenerator::genPubKeys(SecretKey &sec_key) {
     (*impl_)->genPubKeys(*getImpl(sec_key));
+    return KeyPack((*impl_)->getKeyPack());
 }
 
 MultiKeyGenerator::MultiKeyGenerator(const std::vector<Context> &contexts, const std::string &store_path,

@@ -22,6 +22,7 @@
 #include "EVI/impl/ContextImpl.hpp"
 
 #include <deb/CKKSTypes.hpp>
+#include <deb/Preset.hpp>
 
 namespace evi {
 namespace detail {

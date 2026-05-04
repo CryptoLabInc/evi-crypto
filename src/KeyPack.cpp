@@ -21,7 +21,6 @@
 
 namespace evi {
 KeyPack makeKeyPack(const evi::Context &context) {
-    // TODO : return heaan keypack
     return KeyPack(detail::makeKeyPack(*getImpl(context)));
 }
 
