@@ -54,6 +54,10 @@ ContextImpl::ContextImpl(const evi::ParameterPreset preset, const evi::DeviceTyp
         rank_ = rank;
         show_rank_ = rank;
         break;
+    case EvalMode::SINGLE:
+        rank_ = rank;
+        show_rank_ = rank;
+        break;
     case EvalMode::MM:
         show_rank_ = rank;
         rank_ = rank;

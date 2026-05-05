@@ -358,6 +358,8 @@ void KeyGeneratorImpl<M>::genPubKeys(const SecretKey &sec_key) {
     genEncKey(sec_key);
     if (context_->getEvalMode() == evi::EvalMode::MM) {
         genSwitchingKeys(sec_key);
+    } else if (context_->getEvalMode() == evi::EvalMode::SINGLE) {
+        genRelinKey(sec_key);
     } else {
         genModPackKey(sec_key);
         genRelinKey(sec_key);
@@ -416,6 +418,7 @@ void KeyGeneratorImpl<M>::genSwitchingKey(const SecretKey &sec_key, span<u64> fr
 }
 
 template class KeyGeneratorImpl<EvalMode::FLAT>;
+template class KeyGeneratorImpl<EvalMode::SINGLE>;
 template class KeyGeneratorImpl<EvalMode::RMP>;
 template class KeyGeneratorImpl<EvalMode::RMS>;
 template class KeyGeneratorImpl<EvalMode::MS>;
@@ -426,6 +429,9 @@ KeyGenerator makeKeyGenerator(const Context &context, KeyPack &pack, const std::
     case EvalMode::FLAT:
         return std::static_pointer_cast<KeyGeneratorInterface>(
             std::make_shared<KeyGeneratorImpl<EvalMode::FLAT>>(context, pack, seed));
+    case EvalMode::SINGLE:
+        return std::static_pointer_cast<KeyGeneratorInterface>(
+            std::make_shared<KeyGeneratorImpl<EvalMode::SINGLE>>(context, pack, seed));
     case EvalMode::RMP:
         return std::static_pointer_cast<KeyGeneratorInterface>(
             std::make_shared<KeyGeneratorImpl<EvalMode::RMP>>(context, pack, seed));
@@ -448,6 +454,9 @@ KeyGenerator makeKeyGenerator(const Context &context, const std::optional<std::v
     case EvalMode::FLAT:
         return std::static_pointer_cast<KeyGeneratorInterface>(
             std::make_shared<KeyGeneratorImpl<EvalMode::FLAT>>(context, seed));
+    case EvalMode::SINGLE:
+        return std::static_pointer_cast<KeyGeneratorInterface>(
+            std::make_shared<KeyGeneratorImpl<EvalMode::SINGLE>>(context, seed));
     case EvalMode::RMP:
         return std::static_pointer_cast<KeyGeneratorInterface>(
             std::make_shared<KeyGeneratorImpl<EvalMode::RMP>>(context, seed));
@@ -516,6 +525,8 @@ void MultiKeyGenerator::initialize() {
         }
     } else if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
         evi_keypack_.push_back(evi::detail::makeKeyPack(evi_context_[0]));
+    } else if (evi_context_[0]->getEvalMode() == EvalMode::SINGLE) {
+        evi_keypack_.push_back(evi::detail::makeKeyPack(evi_context_[0]));
     } else {
         throw NotSupportedError("MultiKeyGenerator::initialize does not support EvalMode value: " +
                                 std::to_string(static_cast<int>(evi_context_[0]->getEvalMode())));
@@ -569,6 +580,10 @@ void MultiKeyGenerator::generatePubKey(SecretKey &sec_key) {
             keygen->genPubKeys(sec_key);
         }
     } else if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
+        alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
+        KeyGenerator keygen = makeKeyGenerator(evi_context_[0], evi_keypack_[0], seed);
+        keygen->genPubKeys(sec_key);
+    } else if (evi_context_[0]->getEvalMode() == EvalMode::SINGLE) {
         alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
         KeyGenerator keygen = makeKeyGenerator(evi_context_[0], evi_keypack_[0], seed);
         keygen->genPubKeys(sec_key);
@@ -654,6 +669,8 @@ void MultiKeyGenerator::saveEvalKey() {
             evi_keypack_[i]->saveEvalKeyFile(path);
         }
     } else if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
+        evi_keypack_[0]->saveEvalKeyFile(tmp_store_path.string() + "/EVIKeys" + std::to_string(rank_list_[0]) + ".bin");
+    } else if (evi_context_[0]->getEvalMode() == EvalMode::SINGLE) {
         evi_keypack_[0]->saveEvalKeyFile(tmp_store_path.string() + "/EVIKeys" + std::to_string(rank_list_[0]) + ".bin");
     }
     utils::serializeEvalKey(tmp_store_path.string(), store_path_.string() + "/EvalKey.bin");

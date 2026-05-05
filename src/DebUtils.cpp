@@ -111,7 +111,8 @@ bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::Variadi
         }
     }
     if (swk.axSize() != size) {
-        swk.addAx(2, size - swk.axSize());
+        swk.getAx().clear();
+        swk.addAx(2, size);
     }
     for (u64 i = 0; i < size; ++i) {
         if (swk.ax(i)[0].data() != variad->getPolyData(1, 0) + i * detail::DEGREE) {
@@ -122,7 +123,8 @@ bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::Variadi
         }
     }
     if (swk.bxSize() != size) {
-        swk.addBx(2, size - swk.bxSize());
+        swk.getBx().clear();
+        swk.addBx(2, size);
     }
     for (u64 i = 0; i < size; ++i) {
         if (swk.bx(i)[0].data() != variad->getPolyData(0, 0) + i * detail::DEGREE) {

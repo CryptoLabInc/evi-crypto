@@ -82,6 +82,27 @@ std::string EnDecryptTest::test_key_path = "";
 std::string EnDecryptTest::test_pcmm_key_path = "";
 evi::DeviceType device_type = evi::DeviceType::CPU;
 
+TEST_F(EnDecryptTest, SingleEncDecTest) {
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::SINGLE);
+    KeyPack pack = makeKeyPack(context);
+    KeyGenerator keygen = makeKeyGenerator(context, pack);
+
+    auto sec_key = keygen->genSecKey();
+
+    keygen->genPubKeys(sec_key);
+
+    Encryptor enc = makeEncryptor(context, pack);
+    Decryptor dec = makeDecryptor(context);
+
+    std::vector<float> msg(DEGREE, 0);
+    randomFaces(msg.data(), -1, 1, 1, rank);
+
+    auto query = enc->encrypt(msg, evi::EncodeType::ITEM);
+    auto dmsg = dec->decrypt(query, sec_key);
+
+    EXPECT_LE(maxError(dmsg, msg), MAX_ERROR);
+}
+
 TEST_F(EnDecryptTest, BaseQueryEncDecTest) {
     Context context = makeContext(preset, device_type, rank, evi::EvalMode::FLAT);
     KeyPack pack = makeKeyPack(context);

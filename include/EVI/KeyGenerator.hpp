@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
+#include <string>
 
 namespace evi {
 namespace detail {
