@@ -46,6 +46,10 @@ struct EncodedMagnitude {
 
 EncodedMagnitude encodeScaledMagnitude(double value) {
 #if defined(_MSC_VER) && !defined(__clang__)
+    // RMP currently uses 51-bit PRIME_Q and 55-bit PRIME_P, so this rounded
+    // coefficient stays within int64_t before converting to unsigned magnitude.
+    // If a future preset moves to 59-bit-or-larger primes, this path should
+    // be revisited and promoted back to i128-based handling.
     const auto rounded = static_cast<i64>(value + (value > 0 ? 0.5 : -0.5));
     const bool is_positive = rounded >= 0;
     const u64 magnitude = is_positive ? static_cast<u64>(rounded) : static_cast<u64>(-(rounded + 1)) + 1;
