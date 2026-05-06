@@ -46,8 +46,14 @@ endif()
 set(DEB_PARAMETER_JSON
     "${CMAKE_CURRENT_SOURCE_DIR}/deb-param.json"
     CACHE STRING "" FORCE)
+set(DEB_MEMORY_ALIGN_SIZE_VALUE "${ALIGNMENT_BYTE}")
+if(WIN32)
+  # deb uses std::aligned_alloc when explicit alignment is enabled. MinGW and
+  # MSVC Windows builds do not consistently expose that C++17 API.
+  set(DEB_MEMORY_ALIGN_SIZE_VALUE 0)
+endif()
 set(DEB_MEMORY_ALIGN_SIZE
-    "${ALIGNMENT_BYTE}"
+    "${DEB_MEMORY_ALIGN_SIZE_VALUE}"
     CACHE STRING "" FORCE)
 
 # Guard: in a monorepo build, `deb` is brought in transitively by hem
