@@ -1,7 +1,5 @@
 # evi-crypto
 
-`evi-crypto` is a homomorphic encryption module designed to execute vector search queries securely over encrypted data.
-
 ### Build
 ```sh
 cmake -S . -B build
@@ -31,6 +29,7 @@ Notes
 ```
 $ pip wheel . --no-deps -w dist -Cbuild-dir=build
 $ pip install dist/evi-0.1.0-cp312-cp312-linux_x86_64.whl
+$ pip install pytest numpy
 $ pytest pybind/test/ ## for test
 ```
 

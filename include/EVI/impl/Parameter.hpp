@@ -69,6 +69,25 @@ struct ConstantPreset {
     }
 
     virtual ParameterPreset getPreset() const = 0;
+
+    // Backward L0 key primes for MMS post-PCMM key-switch.
+    //
+    // IP1 MMS flow uses base conversion IP1→IP0, so the backward keys are
+    // stored mod IP0 primes. IP2 MMS has no base conversion — backward keys
+    // stay in IP2 primes. IP0 has no MMS flow today; default falls back to
+    // own primes.
+    //
+    // Centralizing this avoids the `q <= UINT32_MAX` heuristic leaking into
+    // serialization, keygen, and runtime KS sites.
+    virtual u64 getBackwardKeyQ() const {
+        return getPrimeQ();
+    }
+    virtual u64 getBackwardKeyP() const {
+        return getPrimeP();
+    }
+    virtual ParameterPreset getBackwardKeyPreset() const {
+        return getPreset();
+    }
 };
 
 struct IPBase : ConstantPreset {
@@ -265,6 +284,18 @@ public:
         return preset;
     }
 
+    // IP1 MMS base-converts to IP0 before backward KS, so backward keys
+    // use IP0 primes (not own IP1 primes).
+    u64 getBackwardKeyQ() const override {
+        return IPBase::PRIME_Q;
+    }
+    u64 getBackwardKeyP() const override {
+        return IPBase::PRIME_P;
+    }
+    ParameterPreset getBackwardKeyPreset() const override {
+        return ParameterPreset::IP0;
+    }
+
     static constexpr u64 PRIME_Q = 17179754497;
     static constexpr u64 PSI_Q = 0;
 
@@ -292,11 +323,129 @@ public:
     static constexpr u64 INV_DEGREE_SHOUP_P = divide128By64Lo(INV_DEGREE_P, 0, PRIME_P);
 
     static constexpr u32 HAMMING_WEIGHT = 2730;
-    static constexpr double SCALE_FACTOR = 34.0;
-    static constexpr double DB_SCALE_FACTOR = 51.0;
-    static constexpr double QUERY_SCALE_FACTOR = 17.0;
+    static constexpr double SCALE_FACTOR = 32.41502786830222504477205802686512470245361328125L;
+    static constexpr double DB_SCALE_FACTOR = 50.207497423806131564560928381979465484619140625L;
+    static constexpr double QUERY_SCALE_FACTOR = 16.207513934151112522386029013432562351226806640625L;
 
     static constexpr ParameterPreset preset = ParameterPreset::IP1;
+};
+
+struct IP2Base : ConstantPreset {
+public:
+    IP2Base() = default;
+    ~IP2Base() = default;
+
+    u64 getPrimeQ() const override {
+        return PRIME_Q;
+    }
+    u64 getPrimeP() const override {
+        return PRIME_P;
+    }
+    u64 getPsiQ() const override {
+        return PSI_Q;
+    }
+    u64 getPsiP() const override {
+        return PSI_P;
+    }
+    u64 getTwoPrimeQ() const override {
+        return TWO_PRIME_Q;
+    }
+    u64 getTwoPrimeP() const override {
+        return TWO_PRIME_P;
+    }
+    u64 getHalfPrimeQ() const override {
+        return HALF_PRIME_Q;
+    }
+    u64 getHalfPrimeP() const override {
+        return HALF_PRIME_P;
+    }
+    u64 getTwoTo64Q() const override {
+        return TWO_TO_64_Q;
+    }
+    u64 getTwoTo64P() const override {
+        return TWO_TO_64_P;
+    }
+    u64 getTwoTo64ShoupQ() const override {
+        return TWO_TO_64_SHOUP_Q;
+    }
+    u64 getTwoTo64ShoupP() const override {
+        return TWO_TO_64_SHOUP_P;
+    }
+    u64 getBarrRatioQ() const override {
+        return BARRETT_RATIO_FOR_U64_Q;
+    }
+    u64 getBarrRatioP() const override {
+        return BARRETT_RATIO_FOR_U64_P;
+    }
+    u64 getPModQ() const override {
+        return PMOD_Q;
+    }
+    u64 getModDownProdInverseModEnd() const override {
+        return MOD_DOWN_PROD_INVERSE_MOD_END;
+    }
+    u64 getInvDegreeQ() const override {
+        return INV_DEGREE_Q;
+    }
+    u64 getInvDegreeP() const override {
+        return INV_DEGREE_P;
+    }
+    u64 getInvDegreeShoupQ() const override {
+        return INV_DEGREE_SHOUP_Q;
+    }
+    u64 getInvDegreeShoupP() const override {
+        return INV_DEGREE_SHOUP_P;
+    }
+    u32 getHW() const override {
+        return HAMMING_WEIGHT;
+    }
+
+    double getScaleFactor() const override {
+        return SCALE_FACTOR;
+    }
+    double getDBScaleFactor() const override {
+        return DB_SCALE_FACTOR;
+    }
+    double getQueryScaleFactor() const override {
+        return QUERY_SCALE_FACTOR;
+    }
+    ParameterPreset getPreset() const override {
+        return preset;
+    }
+
+    // 32-bit NTT primes: p = 1 (mod 8192), fits u32
+    static constexpr u64 PRIME_Q = 4294828033; // 32 bits
+    static constexpr u64 PSI_Q = 567303915;
+
+    static constexpr u64 PRIME_P = 4294729729; // 32 bits
+    static constexpr u64 PSI_P = 228263120;
+
+    static constexpr u64 TWO_PRIME_Q = PRIME_Q << 1;
+    static constexpr u64 TWO_PRIME_P = PRIME_P << 1;
+    static constexpr u64 HALF_PRIME_Q = PRIME_Q >> 1;
+    static constexpr u64 HALF_PRIME_P = PRIME_P >> 1;
+    static constexpr u64 TWO_TO_64_Q = powModSimple(2, 64, PRIME_Q);
+    static constexpr u64 TWO_TO_64_P = powModSimple(2, 64, PRIME_P);
+    static constexpr u64 TWO_TO_64_SHOUP_Q = divide128By64Lo(TWO_TO_64_Q, 0, PRIME_Q);
+    static constexpr u64 TWO_TO_64_SHOUP_P = divide128By64Lo(TWO_TO_64_P, 0, PRIME_P);
+    static constexpr u64 BARRETT_RATIO_FOR_U64_Q = divide128By64Lo(1, 0, PRIME_Q);
+    static constexpr u64 BARRETT_RATIO_FOR_U64_P = divide128By64Lo(1, 0, PRIME_P);
+    static constexpr u64 PMOD_Q = reduceBarrett(PRIME_Q, BARRETT_RATIO_FOR_U64_Q, PRIME_P);
+    static constexpr u64 MOD_DOWN_PROD_INVERSE_MOD_END = powModSimple(PRIME_P, PRIME_Q - 2, PRIME_Q);
+    static constexpr u64 INV_DEGREE_Q = powModSimple(DEGREE, PRIME_Q - 2, PRIME_Q);
+    static constexpr u64 INV_DEGREE_P = powModSimple(DEGREE, PRIME_P - 2, PRIME_P);
+    static constexpr u64 INV_DEGREE_SHOUP_Q = divide128By64Lo(INV_DEGREE_Q, 0, PRIME_Q);
+    static constexpr u64 INV_DEGREE_SHOUP_P = divide128By64Lo(INV_DEGREE_P, 0, PRIME_P);
+
+    static constexpr u32 HAMMING_WEIGHT = 2730;
+
+    // AM-GM optimal for 32-bit primes
+    // Total = log2(Q*P) - log2(3) = 62.415
+    // Post-rescale: total - log2(P) = 30.415
+    static constexpr double SCALE_FACTOR = 30.4149907195753;
+    static constexpr double DB_SCALE_FACTOR = 50.0610951224477;
+    static constexpr double QUERY_SCALE_FACTOR = 12.353815795306446;
+
+    static constexpr ParameterPreset preset = ParameterPreset::IP2;
 };
 
 struct QFBase : ConstantPreset {

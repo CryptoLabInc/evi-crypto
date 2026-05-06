@@ -20,6 +20,7 @@
 #include "utils/DebUtils.hpp"
 #include "utils/Exceptions.hpp"
 #include "utils/Utils.hpp"
+#include "utils/security/Security.hpp"
 
 #include <deb/SecretKeyGenerator.hpp>
 
@@ -27,35 +28,237 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <new>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#define EVI_SECRET_PAGE_PROTECT 1
+#else
+#define EVI_SECRET_PAGE_PROTECT 0
+#endif
 
 namespace evi {
 namespace detail {
 
-SecretKeyData::SecretKeyData(const Context &context) : deb_sk_(utils::getDebPreset(context)) {
+#if EVI_SECRET_PAGE_PROTECT
+class SecretMemoryPages {
+public:
+    explicit SecretMemoryPages(const Context &context) : SecretMemoryPages(utils::getDebPreset(context)) {}
+
+    explicit SecretMemoryPages(const deb::Preset preset) {
+        coeff_ = allocate(sizeof(s_poly));
+        key_q_ = allocate(sizeof(poly));
+        key_p_ = allocate(sizeof(poly));
+        deb_sk_ = allocate(sizeof(deb::SecretKey));
+        new (deb_sk_.ptr) deb::SecretKey(preset);
+    }
+
+    ~SecretMemoryPages() {
+        evi::security::setMemoryProtection(deb_sk_.ptr, sizeof(deb::SecretKey), PROT_READ | PROT_WRITE);
+        reinterpret_cast<deb::SecretKey *>(deb_sk_.ptr)->~SecretKeyT();
+        release(deb_sk_, sizeof(deb::SecretKey));
+        release(coeff_, sizeof(s_poly));
+        release(key_q_, sizeof(poly));
+        release(key_p_, sizeof(poly));
+    }
+
+    s_poly &coeff() noexcept {
+        return *reinterpret_cast<s_poly *>(coeff_.ptr);
+    }
+
+    poly &keyQ() noexcept {
+        return *reinterpret_cast<poly *>(key_q_.ptr);
+    }
+
+    poly &keyP() noexcept {
+        return *reinterpret_cast<poly *>(key_p_.ptr);
+    }
+
+    deb::SecretKey &debSk() noexcept {
+        return *reinterpret_cast<deb::SecretKey *>(deb_sk_.ptr);
+    }
+
+    void protect() {
+        evi::security::setMemoryProtection(coeff_.ptr, sizeof(s_poly), PROT_NONE);
+        evi::security::setMemoryProtection(key_q_.ptr, sizeof(poly), PROT_NONE);
+        evi::security::setMemoryProtection(key_p_.ptr, sizeof(poly), PROT_NONE);
+        evi::security::setMemoryProtection(deb_sk_.ptr, sizeof(deb::SecretKey), PROT_NONE);
+    }
+
+    void unprotect() {
+        evi::security::setMemoryProtection(coeff_.ptr, sizeof(s_poly), PROT_READ | PROT_WRITE);
+        evi::security::setMemoryProtection(key_q_.ptr, sizeof(poly), PROT_READ | PROT_WRITE);
+        evi::security::setMemoryProtection(key_p_.ptr, sizeof(poly), PROT_READ | PROT_WRITE);
+        evi::security::setMemoryProtection(deb_sk_.ptr, sizeof(deb::SecretKey), PROT_READ | PROT_WRITE);
+    }
+
+private:
+    struct Mapping {
+        void *ptr = nullptr;
+        std::size_t alloc_size = 0;
+    };
+
+    static Mapping allocate(std::size_t size) {
+        const std::size_t ps = evi::security::pageSize();
+        const std::size_t alloc_size = ((size + ps - 1) / ps) * ps;
+        void *mem = ::mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mem == MAP_FAILED) {
+            throw std::runtime_error("mmap failed for SecretKey protected memory");
+        }
+        evi::security::secureZeroMemory(mem, size);
+        return Mapping{mem, alloc_size};
+    }
+
+    static void release(Mapping &mapping, std::size_t logical_size) noexcept {
+        if (mapping.ptr == nullptr) {
+            return;
+        }
+        (void)::mprotect(mapping.ptr, mapping.alloc_size, PROT_READ | PROT_WRITE);
+        evi::security::secureZeroMemory(mapping.ptr, logical_size);
+        (void)::mprotect(mapping.ptr, mapping.alloc_size, PROT_NONE);
+        (void)::munmap(mapping.ptr, mapping.alloc_size);
+        mapping.ptr = nullptr;
+        mapping.alloc_size = 0;
+    }
+
+    Mapping coeff_{};
+    Mapping key_q_{};
+    Mapping key_p_{};
+    Mapping deb_sk_{};
+};
+#else
+class SecretMemoryPages {
+public:
+    explicit SecretMemoryPages(const Context &context) : SecretMemoryPages(utils::getDebPreset(context)) {}
+
+    explicit SecretMemoryPages(const deb::Preset preset) {
+        coeff_ = std::make_unique<s_poly>();
+        key_q_ = std::make_unique<poly>();
+        key_p_ = std::make_unique<poly>();
+        deb_sk_ = std::make_unique<deb::SecretKey>(preset);
+    }
+
+    ~SecretMemoryPages() {
+        if (coeff_) {
+            evi::security::secureZeroMemory(coeff_->data(), sizeof(s_poly));
+        }
+        if (key_q_) {
+            evi::security::secureZeroMemory(key_q_->data(), sizeof(poly));
+        }
+        if (key_p_) {
+            evi::security::secureZeroMemory(key_p_->data(), sizeof(poly));
+        }
+        if (deb_sk_) {
+            evi::security::secureZeroMemory(deb_sk_->coeffs(), DEGREE * sizeof(int8_t));
+        }
+    }
+
+    s_poly &coeff() noexcept {
+        return *coeff_;
+    }
+
+    poly &keyQ() noexcept {
+        return *key_q_;
+    }
+
+    poly &keyP() noexcept {
+        return *key_p_;
+    }
+
+    deb::SecretKey &debSk() noexcept {
+        return *deb_sk_;
+    }
+
+    void protect() {}
+    void unprotect() {}
+
+private:
+    std::unique_ptr<s_poly> coeff_;
+    std::unique_ptr<poly> key_q_;
+    std::unique_ptr<poly> key_p_;
+    std::unique_ptr<deb::SecretKey> deb_sk_;
+};
+#endif
+
+SecretKeyData::SecretKeyData(const Context &context)
+    : secret_mem_(std::make_unique<SecretMemoryPages>(context)), sec_coeff_(secret_mem_->coeff()),
+      sec_key_q_(secret_mem_->keyQ()), sec_key_p_(secret_mem_->keyP()), deb_sk_(secret_mem_->debSk()) {
     preset_ = context->getParam()->getPreset();
     s_info_ = SealInfo(SealMode::NONE);
+    sec_loaded_ = false;
+    secret_mem_->protect();
 }
 
 SecretKeyData::SecretKeyData(const std::string &path, const std::optional<SealInfo> &s_info)
-    : deb_sk_(deb::PRESET_EVI_IP0) {
+    : secret_mem_(std::make_unique<SecretMemoryPages>(deb::PRESET_EVI_IP0)), sec_coeff_(secret_mem_->coeff()),
+      sec_key_q_(secret_mem_->keyQ()), sec_key_p_(secret_mem_->keyP()), deb_sk_(secret_mem_->debSk()) {
 
     s_info_ = s_info;
+    sec_loaded_ = false;
+    secret_mem_->unprotect();
+    if (s_info_.has_value() && s_info_.value().s_mode != SealMode::NONE) {
+        teew_.emplace(s_info_.value());
+    }
     if (!s_info.has_value() || s_info->s_mode == SealMode::NONE) {
         loadSecKey(path);
     } else {
         loadSealedSecKey(path);
     }
+    secret_mem_->protect();
 }
 
 SecretKeyData::SecretKeyData(std::istream &stream, const std::optional<SealInfo> &s_info)
-    : deb_sk_(deb::PRESET_EVI_IP0) {
+    : secret_mem_(std::make_unique<SecretMemoryPages>(deb::PRESET_EVI_IP0)), sec_coeff_(secret_mem_->coeff()),
+      sec_key_q_(secret_mem_->keyQ()), sec_key_p_(secret_mem_->keyP()), deb_sk_(secret_mem_->debSk()) {
     s_info_ = s_info;
+    sec_loaded_ = false;
+    secret_mem_->unprotect();
+    if (s_info_.has_value() && s_info_.value().s_mode != SealMode::NONE) {
+        teew_.emplace(s_info_.value());
+    }
     if (!s_info_.has_value() || s_info_.value().s_mode == SealMode::NONE) {
         loadSecKey(stream);
     } else {
         loadSealedSecKey(stream);
+    }
+    secret_mem_->protect();
+}
+
+SecretKeyData::~SecretKeyData() {
+    reset();
+}
+
+void SecretKeyData::openAccess() {
+    std::lock_guard<std::mutex> lock(access_mtx_);
+    secret_mem_->unprotect();
+}
+
+void SecretKeyData::closeAccess() noexcept {
+    std::lock_guard<std::mutex> lock(access_mtx_);
+    try {
+        secret_mem_->protect();
+    } catch (...) {
+    }
+}
+
+void SecretKeyData::reset() noexcept {
+    std::lock_guard<std::mutex> lock(access_mtx_);
+    try {
+        secret_mem_->unprotect();
+    } catch (...) {
+    }
+    evi::security::secureZeroMemory(sec_coeff_.data(), sizeof(sec_coeff_));
+    evi::security::secureZeroMemory(sec_key_q_.data(), sizeof(sec_key_q_));
+    evi::security::secureZeroMemory(sec_key_p_.data(), sizeof(sec_key_p_));
+    evi::security::secureZeroMemory(deb_sk_.coeffs(), DEGREE * sizeof(int8_t));
+    sec_loaded_ = false;
+    try {
+        secret_mem_->protect();
+    } catch (...) {
     }
 }
 
@@ -82,6 +285,7 @@ void SecretKeyData::loadSecKey(const std::string &dir_path) {
 }
 
 void SecretKeyData::loadSecKey(std::istream &in) {
+    SecretKeyAccessScope scoped_access(*this);
     in.read(reinterpret_cast<char *>(&sec_loaded_), sizeof(bool));
     if (sec_loaded_) {
         char preset_buf[4];
@@ -128,6 +332,7 @@ void SecretKeyData::saveSecKey(const std::string &dir_path) const {
 }
 
 void SecretKeyData::saveSecKey(std::ostream &out) const {
+    SecretKeyAccessScope scoped_access(*const_cast<SecretKeyData *>(this));
     if (!sec_loaded_) {
         throw evi::KeyNotLoadedError("Secret key is not loaded to be saved");
     }
@@ -253,6 +458,36 @@ SecretKey makeSecKey(const std::string &path, const std::optional<SealInfo> &s_i
 
 SecretKey makeSecKey(std::istream &stream, const std::optional<SealInfo> &s_info) {
     return std::make_shared<SecretKeyData>(stream, s_info);
+}
+
+SecretKeyAccessScope::SecretKeyAccessScope(SecretKeyData &secret_key)
+    : SecretKeyAccessScope(std::shared_ptr<SecretKeyData>(&secret_key, [](SecretKeyData *) {})) {}
+
+SecretKeyAccessScope::SecretKeyAccessScope(const SecretKey &key)
+    : SecretKeyAccessScope(std::shared_ptr<SecretKeyData>(key)) {}
+
+SecretKeyAccessScope::SecretKeyAccessScope(const std::shared_ptr<SecretKeyData> &key) : key_(key) {
+    if (key_ != nullptr) {
+        key_->openAccess();
+    }
+}
+
+SecretKeyAccessScope::~SecretKeyAccessScope() {
+    if (key_ != nullptr) {
+        key_->closeAccess();
+    }
+}
+
+SecretKeyAccessScope::SecretKeyAccessScope(SecretKeyAccessScope &&other) noexcept : key_(std::move(other.key_)) {}
+
+SecretKeyAccessScope &SecretKeyAccessScope::operator=(SecretKeyAccessScope &&other) noexcept {
+    if (this != &other) {
+        if (key_ != nullptr) {
+            key_->closeAccess();
+        }
+        key_ = std::exchange(other.key_, nullptr);
+    }
+    return *this;
 }
 
 } // namespace detail

@@ -90,7 +90,7 @@ private:
     void genSecKeyFromCoeff(SecretKey &sec_key, const int *sec_coeff);
     void genSwitchingKey(const SecretKey &sec_key, span<u64> from_s, span<u64> out_a_q, span<u64> out_a_p,
                          span<u64> out_b_q, span<u64> out_b_p);
-    void genSwitchingKeys(const SecretKey &sec_key);
+    void genSwitchingKeys(const SecretKey &sec_key) override;
     const Context context_;
     deb::KeyGenerator deb_keygen_;
 
@@ -105,11 +105,12 @@ class MultiKeyGenerator final {
 public:
     MultiKeyGenerator(std::vector<Context> &context, const std::string &store_path, SealInfo &s_info,
                       const std::optional<std::vector<u8>> &seed = std::nullopt);
-    ~MultiKeyGenerator() = default;
+    ~MultiKeyGenerator();
 
     SecretKey generateKeys();
     SecretKey generateKeys(std::ostream &os);
     SecretKey generateKeys(std::ostream &seckey, std::ostream &enckey, std::ostream &evalkey);
+    SecretKey generateKeys(SecretKey &seckey, std::ostream &enckey, std::ostream &evalkey);
     SecretKey generateSecKey();
 
     void generateKeysFromSecKey(const std::string &sec_key_path);
@@ -130,7 +131,8 @@ private:
     std::shared_ptr<SealInfo> s_info_;
     std::optional<TEEWrapper> teew_;
 
-    std::shared_ptr<alea_state> as_;
+    std::shared_ptr<alea_state> sec_as_;
+    std::shared_ptr<alea_state> pub_as_;
 
     std::vector<int> rank_list_;
     std::vector<std::pair<int, int>> inner_rank_list_;

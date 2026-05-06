@@ -25,6 +25,8 @@
 #include "utils/Exceptions.hpp"
 #include "utils/Sampler.hpp"
 #include "utils/Utils.hpp"
+#include "utils/security/Security.hpp"
+#include <alea/alea.h>
 #include <nlohmann/json.hpp>
 
 #include "EVI/impl/KeyGeneratorImpl.hpp"
@@ -65,18 +67,19 @@ KeyGeneratorImpl<M>::KeyGeneratorImpl(const Context &context, const std::optiona
 template <EvalMode M>
 SecretKey KeyGeneratorImpl<M>::genSecKey(std::optional<const int *> coeff) {
     SecretKey seckey = std::make_shared<SecretKeyData>(context_);
+    SecretKeyAccessScope key_access(seckey);
     if (coeff) {
-        std::copy_n(coeff.value(), DEGREE, seckey->sec_coeff_.data());
+        std::copy_n(coeff.value(), DEGREE, seckey->getCoeff().data());
     } else {
-        sampler_.sampleHWT(seckey->sec_coeff_);
+        sampler_.sampleHWT(seckey->getCoeff());
     }
     for (u64 i = 0; i < DEGREE; ++i) {
-        seckey->deb_sk_.coeffs()[i] = static_cast<int8_t>(seckey->sec_coeff_[i]);
+        seckey->getDebSecKey().coeffs()[i] = static_cast<int8_t>(seckey->getCoeff()[i]);
     }
-    seckey->deb_sk_ =
-        deb::SecretKeyGenerator::GenSecretKeyFromCoeff(utils::getDebPreset(context_), seckey->deb_sk_.coeffs());
-    std::memcpy(seckey->sec_key_q_.data(), seckey->deb_sk_[0][0].data(), detail::U64_DEGREE);
-    std::memcpy(seckey->sec_key_p_.data(), seckey->deb_sk_[0][1].data(), detail::U64_DEGREE);
+    seckey->getDebSecKey() =
+        deb::SecretKeyGenerator::GenSecretKeyFromCoeff(utils::getDebPreset(context_), seckey->getDebSecKey().coeffs());
+    std::memcpy(seckey->getKeyQ().data(), seckey->getDebSecKey()[0][0].data(), detail::U64_DEGREE);
+    std::memcpy(seckey->getKeyP().data(), seckey->getDebSecKey()[0][1].data(), detail::U64_DEGREE);
     seckey->sec_loaded_ = true;
     return seckey;
 }
@@ -93,31 +96,42 @@ std::vector<SecretKey> KeyGeneratorImpl<M>::genMultiSecKey() {
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genSharedASwitchKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) {
+    SecretKeyAccessScope from_access(sec_from);
     pack_->num_shared_secret = sec_to.size();
 
     pack_->shared_a_key->setSize(sec_to.size() * sec_to.size() * DEGREE, sec_to.size() * DEGREE);
-    // genA
+
+    // QPR detection: use PR*s instead of P*s when num_p >= 3
+    const auto deb_num_p_local = utils::getDebNumP(context_);
+    const bool use_qpr = (deb_num_p_local >= 3);
+    const u64 *deb_primes_local = use_qpr ? utils::getDebPrimes(context_) : nullptr;
+    const u64 r_prime_local = use_qpr ? deb_primes_local[2] : 0;
+
+    // genA: independent random for Q and P (same as original RMS pattern)
     for (u64 i = 0; i < sec_to.size(); ++i) {
         sampler_.sampleUniformModQ(pack_->shared_a_key->getPolyData(1, 0) + (i * DEGREE));
         sampler_.sampleUniformModP(pack_->shared_a_key->getPolyData(1, 1) + (i * DEGREE));
     }
+
     // genB
     poly error_poly_q;
     poly error_poly_p;
     poly poly_p{};
 
+    // P*s term: P is the key-switch auxiliary (same as RMS at level 0)
     poly_p[0] = context_->getParam()->getPModQ();
     context_->nttModQ(poly_p);
 
     for (u64 i = 0; i < sec_to.size(); ++i) {
+        SecretKeyAccessScope to_access_i(sec_to[i]);
         for (u64 j = 0; j < sec_to.size(); ++j) {
             sampler_.sampleGaussian(error_poly_q, error_poly_p);
             context_->nttModQ(error_poly_q);
             context_->nttModP(error_poly_p);
 
-            context_->multModQ(pack_->shared_a_key->getPolyData(1, 0) + j * DEGREE, sec_to[i]->sec_key_q_,
+            context_->multModQ(pack_->shared_a_key->getPolyData(1, 0) + j * DEGREE, sec_to[i]->getKeyQ(),
                                pack_->shared_a_key->getPolyData(0, 0) + ((j * sec_to.size() + i) * DEGREE));
-            context_->multModP(pack_->shared_a_key->getPolyData(1, 1) + j * DEGREE, sec_to[i]->sec_key_p_,
+            context_->multModP(pack_->shared_a_key->getPolyData(1, 1) + j * DEGREE, sec_to[i]->getKeyP(),
                                pack_->shared_a_key->getPolyData(0, 1) + ((j * sec_to.size() + i) * DEGREE));
             context_->addModQ(pack_->shared_a_key->getPolyData(0, 0) + ((j * sec_to.size() + i) * DEGREE), error_poly_q,
                               pack_->shared_a_key->getPolyData(0, 0) + ((j * sec_to.size() + i) * DEGREE));
@@ -125,25 +139,80 @@ void KeyGeneratorImpl<M>::genSharedASwitchKey(const SecretKey &sec_from, const s
                               pack_->shared_a_key->getPolyData(0, 1) + ((j * sec_to.size() + i) * DEGREE));
 
             if (i == j) {
-                context_->madModQ(sec_from->sec_key_q_, poly_p,
+                // P*s term in Q channel (P is KS auxiliary, like RMS)
+                context_->madModQ(sec_from->getKeyQ(), poly_p,
                                   pack_->shared_a_key->getPolyData(0, 0) + ((j * sec_to.size() + i) * DEGREE));
+                // No P*s term in P channel (P ≡ 0 mod P)
             }
         }
     }
 
+    // QPR extension: generate R-channel BEFORE negation (need un-negated A for B computation)
+    if (use_qpr) {
+        deb::utils::ModArith<DEGREE> r_arith(r_prime_local);
+
+        const auto nss = sec_to.size();
+        pack_->shared_a_key_r_a.resize(nss * DEGREE);
+        pack_->shared_a_key_r_b.resize(nss * nss * DEGREE);
+        pack_->r_prime_ = r_prime_local;
+
+        // genA_R: base convert Q→R (BEFORE negation — same +a polynomial as Q/P)
+        const u64 q_prime = context_->getParam()->getPrimeQ();
+        const u64 q_half = q_prime >> 1;
+        for (u64 i = 0; i < nss; ++i) {
+            u64 *a_r = pack_->shared_a_key_r_a.data() + i * DEGREE;
+            poly a_coeff{};
+            std::memcpy(a_coeff.data(), pack_->shared_a_key->getPolyData(1, 0) + i * DEGREE, U64_DEGREE);
+            context_->inttModQ(a_coeff);
+            for (u64 k = 0; k < DEGREE; ++k) {
+                if (a_coeff[k] > q_half) {
+                    a_r[k] = r_prime_local + a_coeff[k] - q_prime;
+                } else {
+                    a_r[k] = a_coeff[k];
+                }
+            }
+            r_arith.forwardNTT(a_r);
+        }
+
+        // genB_R: B[j][i]_R = +A[j]_R * s_i_R (no special term mod R)
+        for (u64 i = 0; i < nss; ++i) {
+            SecretKeyAccessScope to_access_r(sec_to[i]);
+            const u64 *si_r = sec_to[i]->getDebSecKey()[0][2].data();
+            for (u64 j = 0; j < nss; ++j) {
+                u64 *b_r = pack_->shared_a_key_r_b.data() + (j * nss + i) * DEGREE;
+                const u64 *a_r = pack_->shared_a_key_r_a.data() + j * DEGREE;
+                r_arith.mulVector(b_r, a_r, si_r);
+            }
+        }
+
+        // Negate A_R (key stores -a, same as Q/P negation below)
+        for (u64 i = 0; i < nss; ++i) {
+            u64 *a_r = pack_->shared_a_key_r_a.data() + i * DEGREE;
+            for (u64 k = 0; k < DEGREE; ++k) {
+                a_r[k] = a_r[k] == 0 ? 0 : r_prime_local - a_r[k];
+            }
+        }
+    }
+
+    // Negate A (Q and P channels) — after R-channel uses un-negated A
     for (u64 i = 0; i < sec_to.size(); ++i) {
         context_->negateModQ(pack_->shared_a_key->getPolyData(1, 0) + (i * DEGREE));
         context_->negateModP(pack_->shared_a_key->getPolyData(1, 1) + (i * DEGREE));
     }
+
+    fprintf(stderr, "[KEYGEN_FWD] after gen: A_Q[0]=%lu A_P[0]=%lu B_Q[0]=%lu B_P[0]=%lu nss=%zu\n",
+            pack_->shared_a_key->getPolyData(1, 0)[0], pack_->shared_a_key->getPolyData(1, 1)[0],
+            pack_->shared_a_key->getPolyData(0, 0)[0], pack_->shared_a_key->getPolyData(0, 1)[0], sec_to.size());
 }
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genAdditiveSharedASwitchKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) {
+    SecretKeyAccessScope from_access(sec_from);
     // S to s[0] key
     pack_->reverse_switch_key->setSize(sec_to.size() * DEGREE);
 
     for (int i = 0; i < sec_to.size(); i++) {
-        genSwitchingKey(sec_to[i], sec_from->sec_key_q_, pack_->reverse_switch_key->getPolyData(1, 0) + i * DEGREE,
+        genSwitchingKey(sec_to[i], sec_from->getKeyQ(), pack_->reverse_switch_key->getPolyData(1, 0) + i * DEGREE,
                         pack_->reverse_switch_key->getPolyData(1, 1) + i * DEGREE,
                         pack_->reverse_switch_key->getPolyData(0, 0) + i * DEGREE,
                         pack_->reverse_switch_key->getPolyData(0, 1) + i * DEGREE);
@@ -174,22 +243,24 @@ void KeyGeneratorImpl<M>::genAdditiveSharedASwitchKey(const SecretKey &sec_from,
     context_->nttModQ(poly_p);
 
     for (u64 k = 0; k < sec_to.size() - 1; ++k) {
+        SecretKeyAccessScope to_access_k1(sec_to[k + 1]);
         for (u64 i = 0; i <= k; ++i) {
+            SecretKeyAccessScope to_access_i(sec_to[i]);
             // add secret key encryption.
             sampler_.sampleGaussian(error_poly_q, error_poly_p);
             context_->nttModQ(error_poly_q);
             context_->nttModP(error_poly_p);
 
-            context_->multModQ(pack_->additive_shared_a_key[k]->getPolyData(1, 0), sec_to[i]->sec_key_q_,
+            context_->multModQ(pack_->additive_shared_a_key[k]->getPolyData(1, 0), sec_to[i]->getKeyQ(),
                                pack_->additive_shared_a_key[k]->getPolyData(0, 0) + (i * DEGREE));
-            context_->multModP(pack_->additive_shared_a_key[k]->getPolyData(1, 1), sec_to[i]->sec_key_p_,
+            context_->multModP(pack_->additive_shared_a_key[k]->getPolyData(1, 1), sec_to[i]->getKeyP(),
                                pack_->additive_shared_a_key[k]->getPolyData(0, 1) + (i * DEGREE));
             context_->addModQ(pack_->additive_shared_a_key[k]->getPolyData(0, 0) + (i * DEGREE), error_poly_q,
                               pack_->additive_shared_a_key[k]->getPolyData(0, 0) + (i * DEGREE));
             context_->addModP(pack_->additive_shared_a_key[k]->getPolyData(0, 1) + (i * DEGREE), error_poly_p,
                               pack_->additive_shared_a_key[k]->getPolyData(0, 1) + (i * DEGREE));
 
-            context_->madModQ(sec_to[i]->sec_key_q_, poly_p,
+            context_->madModQ(sec_to[i]->getKeyQ(), poly_p,
                               pack_->additive_shared_a_key[k]->getPolyData(0, 0) + (i * DEGREE));
 
             // zero encryption.
@@ -197,9 +268,9 @@ void KeyGeneratorImpl<M>::genAdditiveSharedASwitchKey(const SecretKey &sec_from,
             context_->nttModQ(error_poly_q);
             context_->nttModP(error_poly_p);
 
-            context_->multModQ(pack_->additive_shared_a_key[k]->getPolyData(1, 0), sec_to[i]->sec_key_q_,
+            context_->multModQ(pack_->additive_shared_a_key[k]->getPolyData(1, 0), sec_to[i]->getKeyQ(),
                                pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((k + 2 + i) * DEGREE));
-            context_->multModP(pack_->additive_shared_a_key[k]->getPolyData(1, 1), sec_to[i]->sec_key_p_,
+            context_->multModP(pack_->additive_shared_a_key[k]->getPolyData(1, 1), sec_to[i]->getKeyP(),
                                pack_->additive_shared_a_key[k]->getPolyData(0, 1) + ((k + 2 + i) * DEGREE));
             context_->addModQ(pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((k + 2 + i) * DEGREE), error_poly_q,
                               pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((k + 2 + i) * DEGREE));
@@ -212,9 +283,9 @@ void KeyGeneratorImpl<M>::genAdditiveSharedASwitchKey(const SecretKey &sec_from,
         context_->nttModQ(error_poly_q);
         context_->nttModP(error_poly_p);
 
-        context_->multModQ(pack_->additive_shared_a_key[k]->getPolyData(1, 0), sec_to[k + 1]->sec_key_q_,
+        context_->multModQ(pack_->additive_shared_a_key[k]->getPolyData(1, 0), sec_to[k + 1]->getKeyQ(),
                            pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((k + 1) * DEGREE));
-        context_->multModP(pack_->additive_shared_a_key[k]->getPolyData(1, 1), sec_to[k + 1]->sec_key_p_,
+        context_->multModP(pack_->additive_shared_a_key[k]->getPolyData(1, 1), sec_to[k + 1]->getKeyP(),
                            pack_->additive_shared_a_key[k]->getPolyData(0, 1) + ((k + 1) * DEGREE));
         context_->addModQ(pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((k + 1) * DEGREE), error_poly_q,
                           pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((k + 1) * DEGREE));
@@ -226,15 +297,15 @@ void KeyGeneratorImpl<M>::genAdditiveSharedASwitchKey(const SecretKey &sec_from,
         context_->nttModQ(error_poly_q);
         context_->nttModP(error_poly_p);
 
-        context_->multModQ(pack_->additive_shared_a_key[k]->getPolyData(1, 0), sec_to[k + 1]->sec_key_q_,
+        context_->multModQ(pack_->additive_shared_a_key[k]->getPolyData(1, 0), sec_to[k + 1]->getKeyQ(),
                            pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((2 * k + 3) * DEGREE));
-        context_->multModP(pack_->additive_shared_a_key[k]->getPolyData(1, 1), sec_to[k + 1]->sec_key_p_,
+        context_->multModP(pack_->additive_shared_a_key[k]->getPolyData(1, 1), sec_to[k + 1]->getKeyP(),
                            pack_->additive_shared_a_key[k]->getPolyData(0, 1) + ((2 * k + 3) * DEGREE));
         context_->addModQ(pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((2 * k + 3) * DEGREE), error_poly_q,
                           pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((2 * k + 3) * DEGREE));
         context_->addModP(pack_->additive_shared_a_key[k]->getPolyData(0, 1) + ((2 * k + 3) * DEGREE), error_poly_p,
                           pack_->additive_shared_a_key[k]->getPolyData(0, 1) + ((2 * k + 3) * DEGREE));
-        context_->madModQ(sec_to[k + 1]->sec_key_q_, poly_p,
+        context_->madModQ(sec_to[k + 1]->getKeyQ(), poly_p,
                           pack_->additive_shared_a_key[k]->getPolyData(0, 0) + ((2 * k + 3) * DEGREE));
     }
 
@@ -250,28 +321,32 @@ void KeyGeneratorImpl<M>::genAdditiveSharedASwitchKey(const SecretKey &sec_from,
 //
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genEncKey(const SecretKey &sec_key) {
+    SecretKeyAccessScope key_access(sec_key);
     utils::syncFixedKeyToDebSwkKey(context_, pack_->enckey, pack_->deb_enc_key);
-    deb_keygen_.genEncKeyInplace(pack_->deb_enc_key, sec_key->deb_sk_);
+    deb_keygen_.genEncKeyInplace(pack_->deb_enc_key, sec_key->getDebSecKey());
     pack_->enc_loaded_ = true;
 }
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genRelinKey(const SecretKey &sec_key) {
-    utils::syncFixedKeyToDebSwkKey(context_, pack_->relin_key, pack_->deb_relin_key);
-    deb_keygen_.genMultKeyInplace(pack_->deb_relin_key, sec_key->deb_sk_);
+    SecretKeyAccessScope key_access(sec_key);
+    utils::syncVarKeyToDebSwkKey(context_, pack_->relin_key, pack_->deb_relin_key);
+    deb_keygen_.genMultKeyInplace(pack_->deb_relin_key, sec_key->getDebSecKey());
 }
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genSharedAModPackKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) {
+    SecretKeyAccessScope from_access(sec_from);
     pack_->shared_a_mod_pack_loaded_ = true;
     pack_->shared_a_mod_pack_key->setSize(sec_to.size() * DEGREE);
     for (u64 k = 0; k < sec_to.size(); ++k) { // num key
+        SecretKeyAccessScope to_access(sec_to[k]);
         s_poly from_coeff{};
         for (u64 j = 0; j < context_->getItemsPerCtxt(); ++j) {
             for (u64 i = 0; i < context_->getPadRank(); ++i) {
                 from_coeff[context_->getPadRank() * j + i] =
                     sec_to[i]
-                        ->sec_coeff_[(j * context_->getPadRank() + context_->getPadRank() - 1 - k + DEGREE) % DEGREE];
+                        ->getCoeff()[(j * context_->getPadRank() + context_->getPadRank() - 1 - k + DEGREE) % DEGREE];
             }
         }
 
@@ -302,9 +377,11 @@ inline void automorphism(const T *op, T *res, const deb::Size sig, const deb::Si
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genSwitchKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) {
+    SecretKeyAccessScope from_access(sec_from);
     pack_->switch_key->setSize(sec_to.size() * DEGREE);
     for (u64 k = 0; k < sec_to.size(); ++k) {
-        genSwitchingKey(sec_from, sec_to[k]->sec_key_q_, pack_->switch_key->getPolyData(1, 0) + (k << LOG_DEGREE),
+        SecretKeyAccessScope to_access(sec_to[k]);
+        genSwitchingKey(sec_from, sec_to[k]->getKeyQ(), pack_->switch_key->getPolyData(1, 0) + (k << LOG_DEGREE),
                         pack_->switch_key->getPolyData(1, 1) + (k << LOG_DEGREE),
                         pack_->switch_key->getPolyData(0, 0) + (k << LOG_DEGREE),
                         pack_->switch_key->getPolyData(0, 1) + (k << LOG_DEGREE));
@@ -313,14 +390,16 @@ void KeyGeneratorImpl<M>::genSwitchKey(const SecretKey &sec_from, const std::vec
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genCCSharedAModPackKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) {
+    SecretKeyAccessScope from_access(sec_from);
     pack_->cc_shared_a_mod_pack_loaded_ = true;
     pack_->cc_shared_a_mod_pack_key->setSize(sec_to.size() * DEGREE);
     std::vector<s_poly> multi_sec_key(sec_to.size(), {0});
     for (u64 k = 0; k < sec_to.size(); ++k) { // num key // To prevent precision loss..
+        SecretKeyAccessScope to_access(sec_to[k]);
         for (u64 j = 0; j < DEGREE; j++) {
             for (u64 i = 0; i < DEGREE; ++i) {
                 multi_sec_key[k][(j + i) % DEGREE] +=
-                    (j + i >= DEGREE ? -1 : 1) * sec_to[k]->sec_coeff_[i] * sec_from->sec_coeff_[j];
+                    (j + i >= DEGREE ? -1 : 1) * sec_to[k]->getCoeff()[i] * sec_from->getCoeff()[j];
             }
         }
     }
@@ -346,18 +425,250 @@ void KeyGeneratorImpl<M>::genCCSharedAModPackKey(const SecretKey &sec_from, cons
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genModPackKey(const SecretKey &sec_key) {
-    pack_->deb_mod_pack_key.addAx(2, context_->getPadRank(), true);
-    // assume num_secret == 1
-    pack_->deb_mod_pack_key.addBx(2, context_->getPadRank(), true);
+    SecretKeyAccessScope key_access(sec_key);
+    const auto num_p = utils::getDebNumP(context_);
+    pack_->deb_mod_pack_key.addAx(num_p, context_->getPadRank(), true);
+    pack_->deb_mod_pack_key.addBx(num_p, context_->getPadRank(), true);
     utils::syncVarKeyToDebSwkKey(context_, pack_->mod_pack_key, pack_->deb_mod_pack_key);
-    deb_keygen_.genModPackKeyBundleInplace(context_->getPadRank(), pack_->deb_mod_pack_key, sec_key->deb_sk_);
+    deb_keygen_.genModPackKeyBundleInplace(context_->getPadRank(), pack_->deb_mod_pack_key, sec_key->getDebSecKey());
 }
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genPubKeys(const SecretKey &sec_key) {
     genEncKey(sec_key);
-    if (context_->getEvalMode() == evi::EvalMode::MM) {
+    const auto mode = context_->getEvalMode();
+    if (CHECK_MM(mode)) {
         genSwitchingKeys(sec_key);
+        if (mode == evi::EvalMode::MMS || mode == evi::EvalMode::MMS32) {
+            constexpr int K_NUM_SHARED_SECRET = 4;
+            pack_->num_shared_secret = K_NUM_SHARED_SECRET;
+
+            const auto deb_preset = utils::getDebPreset(context_);
+
+            // 1. Generate random sub-secrets
+            deb::SecretKeyGenerator deb_sk_gen(deb_preset);
+            std::vector<deb::SecretKey> sub_sks;
+            sub_sks.reserve(K_NUM_SHARED_SECRET);
+            for (int i = 0; i < K_NUM_SHARED_SECRET; ++i) {
+                sub_sks.push_back(deb_sk_gen.genSecretKey());
+            }
+
+            // 2. Forward switch keys: each diagonal key (s→s_j) has independent ax.
+            //    Standard RLWE key-switch security requires independent randomness per key.
+            //    The shared-A property is achieved later at toSharedA time, not at keygen.
+            {
+                const auto gadget_rank = deb::get_gadget_rank(deb_preset);
+                const auto num_p = deb::get_num_p(deb_preset);
+                const auto *deb_primes = deb::get_primes(deb_preset);
+
+                SecretKeyAccessScope sk_access(sec_key);
+
+                // Diagonal keys: independent genSwitchingKey per sub-secret
+                pack_->shared_a_fwd_keys.clear();
+                for (int s = 0; s < K_NUM_SHARED_SECRET; ++s) {
+                    deb::SwitchKey sk_key(deb_preset, deb::SWK_GENERIC);
+                    sk_key.addAx(num_p, gadget_rank, true);
+                    sk_key.addBx(num_p, gadget_rank, true);
+
+                    deb::Polynomial from_poly = sec_key->getDebSecKey()[0];
+                    deb::Polynomial to_poly = sub_sks[s][0];
+                    deb_keygen_.genSwitchingKey(&from_poly, &to_poly, sk_key.getAx().data(), sk_key.getBx().data(),
+                                                gadget_rank, gadget_rank);
+
+                    pack_->shared_a_fwd_keys.emplace_back(deb_preset, deb::SWK_AUTO);
+                    auto &fk = pack_->shared_a_fwd_keys[s];
+                    for (deb::Size gi = 0; gi < gadget_rank; ++gi) {
+                        for (deb::Size pj = 0; pj < num_p; ++pj) {
+                            std::memcpy(fk.ax(gi)[pj].data(), sk_key.ax(gi)[pj].data(), DEGREE * sizeof(u64));
+                            std::memcpy(fk.bx(gi)[pj].data(), sk_key.bx(gi)[pj].data(), DEGREE * sizeof(u64));
+                        }
+                    }
+                }
+
+                // Off-diagonal keys: bx = -(ax_s · sk'_j) + e
+                // Uses diagonal key s's ax (independent per s), paired with sub_sks[j].
+                pack_->shared_a_off_diag_keys.clear();
+                auto offdiag_rng = deb::createRandomGenerator(deb::SeedGenerator::Gen());
+                for (int i = 0; i < K_NUM_SHARED_SECRET * K_NUM_SHARED_SECRET; ++i) {
+                    pack_->shared_a_off_diag_keys.emplace_back(deb_preset, deb::SWK_AUTO);
+                }
+                for (int s = 0; s < K_NUM_SHARED_SECRET; ++s) {
+                    const auto &diag_key = pack_->shared_a_fwd_keys[s];
+                    for (int j = 0; j < K_NUM_SHARED_SECRET; ++j) {
+                        if (s == j) {
+                            continue;
+                        }
+                        auto &boff = pack_->shared_a_off_diag_keys[s * K_NUM_SHARED_SECRET + j];
+                        // Copy ax from diagonal key s (independent per s)
+                        for (deb::Size gi = 0; gi < gadget_rank; ++gi) {
+                            for (deb::Size pj = 0; pj < num_p; ++pj) {
+                                std::memcpy(boff.ax(gi)[pj].data(), diag_key.ax(gi)[pj].data(), DEGREE * sizeof(u64));
+                            }
+                        }
+                        for (deb::Size d = 0; d < gadget_rank; ++d) {
+                            std::vector<i64> err_coeff(DEGREE);
+                            offdiag_rng->sampleGaussianInt64Array(err_coeff.data(), DEGREE, 3.2);
+
+                            for (deb::Size p = 0; p < num_p; ++p) {
+                                deb::utils::ModArith<DEGREE> arith(deb_primes[p]);
+                                const u64 prime = deb_primes[p];
+
+                                // bx = -(ax_s · sk'_j) + e
+                                arith.mulVector(boff.bx(d)[p].data(), diag_key.ax(d)[p].data(),
+                                                sub_sks[j][0][p].data());
+                                u64 *bd = boff.bx(d)[p].data();
+                                for (u64 k = 0; k < DEGREE; ++k) {
+                                    bd[k] = bd[k] == 0 ? 0 : prime - bd[k];
+                                }
+                                arith.backwardNTT(bd);
+                                for (u64 k = 0; k < DEGREE; ++k) {
+                                    u64 e_mod = (err_coeff[k] >= 0) ? static_cast<u64>(err_coeff[k])
+                                                                    : prime - static_cast<u64>(-err_coeff[k]);
+                                    u64 sum = bd[k] + e_mod;
+                                    bd[k] = (sum >= prime) ? sum - prime : sum;
+                                }
+                                arith.forwardNTT(bd);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Legacy shared_a_key not used — new deb QPR forward keys stored separately
+            pack_->shared_a_key_loaded_ = false;
+
+            // 4. Backward L0 CRT-consistent keys (s_j → s) for post-PCMM key-switch.
+            //    Target primes come from Parameter::getBackwardKey{Q,P}() so the
+            //    preset/eval-mode routing lives in one place (see Parameter.hpp):
+            //      - IP1 MMS      -> IP0 L0 (base conversion IP1 -> IP0)
+            //      - IP2 MMS      -> IP2 L0 (no base conversion, stays in IP2)
+            //      - IP2 MMS32    -> IP2 L0 (same as IP2 MMS; u32 storage only)
+            //    Source primes always come from the context itself.
+            {
+                const u64 q_val = context_->getParam()->getBackwardKeyQ();
+                const u64 p_val = context_->getParam()->getBackwardKeyP();
+                deb::utils::ModArith<DEGREE> bwd_aq(q_val), bwd_ap(p_val);
+
+                pack_->shared_a_bwd_l0_keys.resize(K_NUM_SHARED_SECRET);
+
+                // Base-convert secret keys from context (source) primes to the
+                // backward target primes. When source == target (IP2/MMS,
+                // IP2/MMS32, IP0/MMS) the conversion is effectively identity
+                // but the same code path is exercised for CT-ness.
+                const u64 q_src = context_->getParam()->getPrimeQ();
+                const u64 p_src = context_->getParam()->getPrimeP();
+                const u64 q_half_src = q_src >> 1;
+                deb::utils::ModArith<DEGREE> aq_src(q_src), ap_src(p_src);
+
+                auto base_conv_key = [&](const u64 *src_ntt, u64 src_prime, u64 src_half,
+                                         deb::utils::ModArith<DEGREE> &src_arith,
+                                         deb::utils::ModArith<DEGREE> &dst_arith, u64 dst_prime) -> std::vector<u64> {
+                    std::vector<u64> coeff(DEGREE), dst(DEGREE);
+                    std::memcpy(coeff.data(), src_ntt, DEGREE * sizeof(u64));
+                    src_arith.backwardNTT(coeff.data());
+                    for (u64 k = 0; k < DEGREE; ++k) {
+                        i64 v = (coeff[k] > src_half) ? (i64)coeff[k] - (i64)src_prime : (i64)coeff[k];
+                        dst[k] = (v >= 0) ? (u64)v % dst_prime : dst_prime - ((u64)(-v) % dst_prime);
+                    }
+                    dst_arith.forwardNTT(dst.data());
+                    return dst;
+                };
+
+                SecretKeyAccessScope bwd_sk_access(sec_key);
+                std::vector<u64> sk_bwd_q =
+                    base_conv_key(sec_key->getKeyQ().data(), q_src, q_half_src, aq_src, bwd_aq, q_val);
+                std::vector<u64> sk_bwd_p =
+                    base_conv_key(sec_key->getKeyQ().data(), q_src, q_half_src, aq_src, bwd_ap, p_val);
+
+                // Sub-secrets in backward target Q (NTT domain). sub_sks are
+                // deb::SecretKey-owned CRT buffers in the context's Q domain.
+                std::vector<std::vector<u64>> sub_sk_bwd_q(K_NUM_SHARED_SECRET);
+                for (int j = 0; j < K_NUM_SHARED_SECRET; ++j) {
+                    sub_sk_bwd_q[j] = base_conv_key(sub_sks[j][0][0].data(), q_src, q_half_src, aq_src, bwd_aq, q_val);
+                }
+
+                // Use deb/alea CSPRNG for all random sampling
+                auto bwd_rng = deb::createRandomGenerator(deb::SeedGenerator::Gen());
+                const __uint128_t qp = static_cast<__uint128_t>(q_val) * p_val;
+
+                for (int j = 0; j < K_NUM_SHARED_SECRET; ++j) {
+                    auto &bk = pack_->shared_a_bwd_l0_keys[j];
+                    bk.ax_q.resize(DEGREE);
+                    bk.ax_p.resize(DEGREE);
+                    bk.bx_q.resize(DEGREE);
+                    bk.bx_p.resize(DEGREE);
+
+                    // CRT-consistent random ax: uniform over [0, Q*P) via rejection sampling
+                    {
+                        const __uint128_t max128 = ~static_cast<__uint128_t>(0);
+                        const __uint128_t threshold = max128 - (max128 % qp);
+                        std::vector<u64> pair(2);
+                        for (u64 k = 0; k < DEGREE; ++k) {
+                            __uint128_t val;
+                            do {
+                                bwd_rng->getRandomUint64Array(pair.data(), 2);
+                                val = (static_cast<__uint128_t>(pair[1]) << 64) | pair[0];
+                            } while (val >= threshold);
+                            val %= qp;
+                            bk.ax_q[k] = static_cast<u64>(val % q_val);
+                            bk.ax_p[k] = static_cast<u64>(val % p_val);
+                        }
+                    }
+                    bwd_aq.forwardNTT(bk.ax_q.data());
+                    bwd_ap.forwardNTT(bk.ax_p.data());
+
+                    // CRT-consistent Gaussian error (σ=3.2)
+                    std::vector<u64> e_q(DEGREE), e_p(DEGREE);
+                    {
+                        std::vector<deb::i64> e_coeffs(DEGREE);
+                        bwd_rng->sampleGaussianInt64Array(e_coeffs.data(), DEGREE, 3.2);
+                        for (u64 k = 0; k < DEGREE; ++k) {
+                            // Constant-time signed→unsigned mod
+                            i64 e = e_coeffs[k];
+                            u64 neg_mask = static_cast<u64>(e >> 63);
+                            e_q[k] = (static_cast<u64>(e) + (q_val & neg_mask)) % q_val;
+                            e_p[k] = (static_cast<u64>(e) + (p_val & neg_mask)) % p_val;
+                        }
+                    }
+                    bwd_aq.forwardNTT(e_q.data());
+                    bwd_ap.forwardNTT(e_p.data());
+
+                    // Constant-time helpers (secret-dependent: bx involves secret key)
+                    auto ct_neg = [](u64 x, u64 prime) -> u64 {
+                        return (prime - x) & static_cast<u64>(-static_cast<i64>(x != 0));
+                    };
+                    auto ct_red = [](u64 x, u64 prime) -> u64 {
+                        return x - (prime & static_cast<u64>(-static_cast<i64>(x >= prime)));
+                    };
+
+                    // bx_Q = -(ax * sk_bwd) + e + sk'_j_bwd * P mod Q  [constant-time]
+                    bwd_aq.mulVector(bk.bx_q.data(), bk.ax_q.data(), sk_bwd_q.data());
+                    for (u64 k = 0; k < DEGREE; ++k) {
+                        bk.bx_q[k] = ct_neg(bk.bx_q[k], q_val);
+                    }
+                    for (u64 k = 0; k < DEGREE; ++k) {
+                        bk.bx_q[k] = ct_red(bk.bx_q[k] + e_q[k], q_val);
+                    }
+                    u64 p_mod_q = p_val % q_val;
+                    std::vector<u64> sfp(DEGREE);
+                    bwd_aq.constMult(sub_sk_bwd_q[j].data(), p_mod_q, sfp.data());
+                    for (u64 k = 0; k < DEGREE; ++k) {
+                        bk.bx_q[k] = ct_red(bk.bx_q[k] + sfp[k], q_val);
+                    }
+
+                    // bx_P = -(ax * sk_bwd) + e (P mod P = 0)  [constant-time]
+                    bwd_ap.mulVector(bk.bx_p.data(), bk.ax_p.data(), sk_bwd_p.data());
+                    for (u64 k = 0; k < DEGREE; ++k) {
+                        bk.bx_p[k] = ct_neg(bk.bx_p[k], p_val);
+                    }
+                    for (u64 k = 0; k < DEGREE; ++k) {
+                        bk.bx_p[k] = ct_red(bk.bx_p[k] + e_p[k], p_val);
+                    }
+                }
+            }
+            // Legacy backward key flag: new L0 keys stored in shared_a_bwd_l0_keys
+            // Do NOT set shared_a_mod_pack_loaded_ — legacy key not populated
+        }
     } else if (context_->getEvalMode() == evi::EvalMode::SINGLE) {
         genRelinKey(sec_key);
     } else {
@@ -369,15 +680,14 @@ void KeyGeneratorImpl<M>::genPubKeys(const SecretKey &sec_key) {
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genSwitchingKeys(const SecretKey &sec_key) {
+    SecretKeyAccessScope key_access(sec_key);
     pack_->eval_loaded_ = true;
     pack_->key_switching_key.resize(DEGREE);
 
     const auto deb_preset = evi::detail::utils::getDebPreset(context_);
-    const auto num_p = deb::get_num_p(deb_preset);
-    const auto gadget_rank = deb::get_gadget_rank(deb_preset);
+    const auto num_p = evi::detail::utils::getDebNumP(context_);
+    const auto gadget_rank = evi::detail::utils::getDebGadgetRank(context_);
     const auto poly_count = num_p * gadget_rank;
-
-    deb::KeyGenerator deb_keygen(deb_preset);
 
     for (deb::u64 sig = 0; sig < DEGREE; ++sig) {
         deb::SwitchKey dk(deb_preset, deb::SWK_AUTO, sig);
@@ -398,20 +708,21 @@ void KeyGeneratorImpl<M>::genSwitchingKeys(const SecretKey &sec_key) {
             }
         }
 
-        deb_keygen.genAutoKeyInplace(sig, dk, sec_key->deb_sk_);
+        deb_keygen_.genAutoKeyInplace(sig, dk, sec_key->getDebSecKey());
     }
 }
 
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genSwitchingKey(const SecretKey &sec_key, span<u64> from_s, span<u64> out_a_q,
                                           span<u64> out_a_p, span<u64> out_b_q, span<u64> out_b_p) {
+    SecretKeyAccessScope key_access(sec_key);
     sampler_.sampleUniformModQ(out_a_q);
     sampler_.sampleUniformModP(out_a_p);
     sampler_.sampleGaussian(out_b_q, out_b_p);
     context_->nttModQ(out_b_q);
     context_->nttModP(out_b_p);
-    context_->madModQ(out_a_q, sec_key->sec_key_q_, out_b_q);
-    context_->madModP(out_a_p, sec_key->sec_key_p_, out_b_p);
+    context_->madModQ(out_a_q, sec_key->getKeyQ(), out_b_q);
+    context_->madModP(out_a_p, sec_key->getKeyP(), out_b_p);
     context_->negateModQ(out_a_q);
     context_->negateModP(out_a_p);
     context_->madModQ(from_s, context_->getParam()->getPModQ(), out_b_q);
@@ -423,6 +734,9 @@ template class KeyGeneratorImpl<EvalMode::RMP>;
 template class KeyGeneratorImpl<EvalMode::RMS>;
 template class KeyGeneratorImpl<EvalMode::MS>;
 template class KeyGeneratorImpl<EvalMode::MM>;
+template class KeyGeneratorImpl<EvalMode::MMS>;
+template class KeyGeneratorImpl<EvalMode::MM32>;
+template class KeyGeneratorImpl<EvalMode::MMS32>;
 
 KeyGenerator makeKeyGenerator(const Context &context, KeyPack &pack, const std::optional<std::vector<u8>> &seed) {
     switch (context->getEvalMode()) {
@@ -444,6 +758,15 @@ KeyGenerator makeKeyGenerator(const Context &context, KeyPack &pack, const std::
     case EvalMode::MM:
         return std::static_pointer_cast<KeyGeneratorInterface>(
             std::make_shared<KeyGeneratorImpl<EvalMode::MM>>(context, pack, seed));
+    case EvalMode::MMS:
+        return std::static_pointer_cast<KeyGeneratorInterface>(
+            std::make_shared<KeyGeneratorImpl<EvalMode::MMS>>(context, pack, seed));
+    case EvalMode::MM32:
+        return std::static_pointer_cast<KeyGeneratorInterface>(
+            std::make_shared<KeyGeneratorImpl<EvalMode::MM32>>(context, pack, seed));
+    case EvalMode::MMS32:
+        return std::static_pointer_cast<KeyGeneratorInterface>(
+            std::make_shared<KeyGeneratorImpl<EvalMode::MMS32>>(context, pack, seed));
     default:
         throw NotSupportedError("Invalid mode");
     }
@@ -469,6 +792,15 @@ KeyGenerator makeKeyGenerator(const Context &context, const std::optional<std::v
     case EvalMode::MM:
         return std::static_pointer_cast<KeyGeneratorInterface>(
             std::make_shared<KeyGeneratorImpl<EvalMode::MM>>(context, seed));
+    case EvalMode::MMS:
+        return std::static_pointer_cast<KeyGeneratorInterface>(
+            std::make_shared<KeyGeneratorImpl<EvalMode::MMS>>(context, seed));
+    case EvalMode::MM32:
+        return std::static_pointer_cast<KeyGeneratorInterface>(
+            std::make_shared<KeyGeneratorImpl<EvalMode::MM32>>(context, seed));
+    case EvalMode::MMS32:
+        return std::static_pointer_cast<KeyGeneratorInterface>(
+            std::make_shared<KeyGeneratorImpl<EvalMode::MMS32>>(context, seed));
     default:
         throw NotSupportedError("Invalid mode");
     }
@@ -489,9 +821,25 @@ MultiKeyGenerator::MultiKeyGenerator(std::vector<Context> &context, const std::s
             std::memcpy(nseed.data() + i * 4, &val, sizeof(val));
         }
     }
-    as_ = std::shared_ptr<void>(alea_init(nseed.data(), ALEA_ALGORITHM_SHAKE256), [](void *p) {
-        alea_free(static_cast<alea_state *>(p));
+    std::vector<u8> sec_seed(SEED_MIN_SIZE);
+    std::vector<u8> pub_seed(SEED_MIN_SIZE);
+    if (alea_hkdf(nseed.data(), nseed.size(), nullptr, 0, reinterpret_cast<const uint8_t *>("seckey"),
+                  std::strlen("seckey"), sec_seed.data(), sec_seed.size()) != ALEA_RETURN_OK) {
+        throw std::runtime_error("Failed to derive seckey seed");
+    }
+    if (alea_hkdf(nseed.data(), nseed.size(), nullptr, 0, reinterpret_cast<const uint8_t *>("pubkey"),
+                  std::strlen("pubkey"), pub_seed.data(), pub_seed.size()) != ALEA_RETURN_OK) {
+        throw std::runtime_error("Failed to derive pubkey seed");
+    }
+    sec_as_ = std::shared_ptr<alea_state>(alea_init(sec_seed.data(), ALEA_ALGORITHM_SHAKE256), [](alea_state *p) {
+        alea_free(p);
     });
+    pub_as_ = std::shared_ptr<alea_state>(alea_init(pub_seed.data(), ALEA_ALGORITHM_SHAKE256), [](alea_state *p) {
+        alea_free(p);
+    });
+    evi::security::secureZeroMemory(sec_seed.data(), sec_seed.size());
+    evi::security::secureZeroMemory(pub_seed.data(), pub_seed.size());
+    evi::security::secureZeroMemory(nseed.data(), nseed.size());
 
     if (evi_context_[0]->getEvalMode() == EvalMode::RMP) {
         for (int i = 0; i < evi_context_.size(); i++) {
@@ -501,7 +849,7 @@ MultiKeyGenerator::MultiKeyGenerator(std::vector<Context> &context, const std::s
         for (int i = 0; i < evi_context_.size(); i++) {
             rank_list_.push_back(context[i]->getRank());
         }
-    } else if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
+    } else if (CHECK_MM(evi_context_[0]->getEvalMode())) {
         for (int i = 0; i < static_cast<int>(evi_context_.size()); i++) {
             auto r = context[i]->getRank();
             rank_list_.push_back(r);
@@ -510,6 +858,25 @@ MultiKeyGenerator::MultiKeyGenerator(std::vector<Context> &context, const std::s
 
     preset_ = context[0]->getParam()->getPreset();
     this->initialize();
+}
+
+MultiKeyGenerator::~MultiKeyGenerator() {
+    if (s_info_) {
+        if (!s_info_->kek.empty()) {
+            evi::security::secureZeroMemory(s_info_->kek.data(), s_info_->kek.size());
+            s_info_->kek.clear();
+            s_info_->kek.shrink_to_fit();
+        }
+        if (!s_info_->h_auth_pw.empty()) {
+            evi::security::secureZeroMemory(s_info_->h_auth_pw.data(), s_info_->h_auth_pw.size());
+            s_info_->h_auth_pw.clear();
+            s_info_->h_auth_pw.shrink_to_fit();
+        }
+    }
+    teew_.reset();
+    sec_as_.reset();
+    pub_as_.reset();
+    s_info_.reset();
 }
 
 void MultiKeyGenerator::initialize() {
@@ -523,7 +890,7 @@ void MultiKeyGenerator::initialize() {
         for (int i = 0; i < rank_list_.size(); i++) {
             evi_keypack_.push_back(evi::detail::makeKeyPack(evi_context_[i]));
         }
-    } else if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
+    } else if (CHECK_MM(evi_context_[0]->getEvalMode())) {
         evi_keypack_.push_back(evi::detail::makeKeyPack(evi_context_[0]));
     } else if (evi_context_[0]->getEvalMode() == EvalMode::SINGLE) {
         evi_keypack_.push_back(evi::detail::makeKeyPack(evi_context_[0]));
@@ -551,12 +918,14 @@ void MultiKeyGenerator::generateKeysFromSecKey(const std::string &sec_key_path) 
     SecretKey sec_key = std::make_shared<SecretKeyData>(sec_key_path);
     generatePubKey(sec_key);
     saveAllKeys(sec_key);
+    sec_key.reset();
 }
 
 SecretKey MultiKeyGenerator::generateSecKey() {
     std::vector<u8> seed(SEED_MIN_SIZE, 0);
-    alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
+    alea_get_random_bytes(sec_as_.get(), seed.data(), SEED_MIN_SIZE);
     KeyGenerator keygen = makeKeyGenerator(evi_context_[0], evi_keypack_[0], seed);
+    evi::security::secureZeroMemory(seed.data(), seed.size());
     SecretKey sec_key = keygen->genSecKey();
     sec_key->s_info_.emplace(*s_info_);
     if (teew_.has_value()) {
@@ -569,25 +938,26 @@ void MultiKeyGenerator::generatePubKey(SecretKey &sec_key) {
     std::vector<u8> seed(SEED_MIN_SIZE, 0);
     if (evi_context_[0]->getEvalMode() == EvalMode::FLAT) {
         for (int i = 0; i < rank_list_.size(); i++) {
-            alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
+            alea_get_random_bytes(pub_as_.get(), seed.data(), SEED_MIN_SIZE);
             KeyGenerator keygen = makeKeyGenerator(evi_context_[i], evi_keypack_[i], seed);
             keygen->genPubKeys(sec_key);
         }
     } else if (evi_context_[0]->getEvalMode() == EvalMode::RMP) {
         for (int i = 0; i < inner_rank_list_.size(); i++) {
-            alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
+            alea_get_random_bytes(pub_as_.get(), seed.data(), SEED_MIN_SIZE);
             KeyGenerator keygen = makeKeyGenerator(evi_context_[inner_rank_list_[i].second], evi_keypack_[i], seed);
             keygen->genPubKeys(sec_key);
         }
-    } else if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
-        alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
+    } else if (CHECK_MM(evi_context_[0]->getEvalMode())) {
+        alea_get_random_bytes(pub_as_.get(), seed.data(), SEED_MIN_SIZE);
         KeyGenerator keygen = makeKeyGenerator(evi_context_[0], evi_keypack_[0], seed);
         keygen->genPubKeys(sec_key);
     } else if (evi_context_[0]->getEvalMode() == EvalMode::SINGLE) {
-        alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
+        alea_get_random_bytes(pub_as_.get(), seed.data(), SEED_MIN_SIZE);
         KeyGenerator keygen = makeKeyGenerator(evi_context_[0], evi_keypack_[0], seed);
         keygen->genPubKeys(sec_key);
     }
+    evi::security::secureZeroMemory(seed.data(), seed.size());
 }
 
 bool MultiKeyGenerator::saveAllKeys(SecretKey &sec_key) {
@@ -615,6 +985,48 @@ SecretKey MultiKeyGenerator::generateKeys(std::ostream &seckey, std::ostream &en
     eval.close();
     fs::remove(eval_path);
     return sk;
+}
+
+SecretKey MultiKeyGenerator::generateKeys(SecretKey &seckey, std::ostream &enckey, std::ostream &evalkey) {
+    if (!seckey) {
+        throw std::logic_error("SecretKey impl is null");
+    }
+    if (!fs::exists(store_path_)) {
+        fs::create_directories(store_path_);
+    }
+
+    generatePubKey(seckey);
+    evi_keypack_[0]->getEncKeyBuffer(enckey);
+
+    const fs::path original_store_path = store_path_;
+    const fs::path temp_store_path =
+        original_store_path / (".tmp-generate-evalkey-" +
+                               std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
+
+    struct StorePathGuard {
+        fs::path &store_path;
+        fs::path original_path;
+
+        ~StorePathGuard() {
+            store_path = original_path;
+        }
+    } guard{store_path_, original_store_path};
+
+    fs::create_directories(temp_store_path);
+    store_path_ = temp_store_path;
+    saveEvalKey();
+
+    const fs::path eval_path = temp_store_path / "EvalKey.bin";
+    std::ifstream eval(eval_path, std::ios::binary);
+    if (!eval.is_open()) {
+        fs::remove_all(temp_store_path);
+        throw std::runtime_error("Failed to open generated EvalKey.bin");
+    }
+
+    evalkey << eval.rdbuf();
+    eval.close();
+    fs::remove_all(temp_store_path);
+    return seckey;
 }
 
 void MultiKeyGenerator::saveEncKey() {
@@ -668,7 +1080,7 @@ void MultiKeyGenerator::saveEvalKey() {
             std::string path = (tmp_store_path.string() + "/EVIKeys" + std::to_string(rank_list_[i]) + ".bin");
             evi_keypack_[i]->saveEvalKeyFile(path);
         }
-    } else if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
+    } else if (CHECK_MM(evi_context_[0]->getEvalMode())) {
         evi_keypack_[0]->saveEvalKeyFile(tmp_store_path.string() + "/EVIKeys" + std::to_string(rank_list_[0]) + ".bin");
     } else if (evi_context_[0]->getEvalMode() == EvalMode::SINGLE) {
         evi_keypack_[0]->saveEvalKeyFile(tmp_store_path.string() + "/EVIKeys" + std::to_string(rank_list_[0]) + ".bin");

@@ -47,10 +47,13 @@ struct alignas(alignment_byte) AlignedArray : public std::array<T, N> {};
 
 using s_poly = AlignedArray<i64, DEGREE>;
 using poly = AlignedArray<u64, DEGREE>;
+using poly32 = AlignedArray<u32, DEGREE>;
 
 using polyvec = std::vector<u64, AlignedAllocator<u64, alignment_byte>>;
+using polyvec32 = std::vector<u32, AlignedAllocator<u32, alignment_byte>>;
 using polyvec128 = std::vector<u128, AlignedAllocator<u128, alignment_byte>>;
 using polydata = u64 *;
+using polydata32 = u32 *;
 
 struct IQuery {
 public:
@@ -60,6 +63,8 @@ public:
     u64 n;
     u64 scale_bit;
     evi::EncodeType encode_type;
+    u8 prime_q_bits = 0;
+    u8 prime_p_bits = 0;
 
     virtual void serializeTo(std::vector<u8> &buf) const = 0;
     virtual void deserializeFrom(const std::vector<u8> &buf) = 0;
@@ -77,8 +82,8 @@ public:
     virtual polyvec128 &getPoly() = 0;
     virtual u128 *getPolyData() = 0;
 
-    virtual DataType &getDataType() = 0;
-    virtual int &getLevel() = 0;
+    virtual DataType getDataType() const = 0;
+    virtual int getLevel() const = 0;
 };
 
 template <DataType T>
@@ -102,10 +107,10 @@ public:
     void serializeTo(std::ostream &stream) const override;
     void deserializeFrom(std::istream &stream) override;
 
-    DataType &getDataType() override {
+    DataType getDataType() const override {
         return dtype_;
     }
-    int &getLevel() override {
+    int getLevel() const override {
         return level_;
     }
 
@@ -163,10 +168,10 @@ struct SerializedSingleQuery : IQuery {
         throw InvalidAccessError("Not compatible type to access to 64-bit array");
     }
 
-    DataType &getDataType() override {
+    DataType getDataType() const override {
         return dtype_;
     }
-    int &getLevel() override {
+    int getLevel() const override {
         return level_;
     }
 
@@ -286,6 +291,18 @@ public:
     u64 dim;
     u64 degree;
     u64 n;
+    u8 prime_q_bits = 0;
+    u8 prime_p_bits = 0;
+    // The parameter preset this ciphertext's coefficients are in.
+    // RUNTIME (default) means "same as the Decryptor's context preset"
+    // (i.e., no base conversion occurred). An explicit value (e.g., IP0)
+    // means the coefficients are in that prime space — set by the compute
+    // pipeline after base conversion.
+    //
+    // Invariant: the Decryptor context preset must always match the
+    // encryption preset. Base conversion is detected by comparing this
+    // field against the context preset.
+    ParameterPreset preset = ParameterPreset::RUNTIME;
 
     virtual polyvec &getPoly(const int pos, const int level, std::optional<const int> index = std::nullopt) = 0;
     virtual const polyvec &getPoly(const int pos, const int level,
@@ -301,8 +318,8 @@ public:
 
     virtual void setSize(const int size, std::optional<int> = std::nullopt) = 0;
 
-    virtual DataType &getDataType() = 0;
-    virtual int &getLevel() = 0;
+    virtual DataType getDataType() const = 0;
+    virtual int getLevel() const = 0;
 };
 
 template <DataType T>
@@ -325,10 +342,10 @@ public:
     void deserializeFrom(std::istream &stream) override;
 
     void setSize(const int size, std::optional<int> = std::nullopt) override;
-    DataType &getDataType() override {
+    DataType getDataType() const override {
         return dtype_;
     }
-    int &getLevel() override {
+    int getLevel() const override {
         return level_;
     }
 

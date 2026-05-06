@@ -21,11 +21,6 @@
 #include <cstdint>
 namespace evi {
 
-enum class KeyVersion : uint8_t {
-    UNINITIALIZED = 0,
-    V1 = 1,
-};
-
 /**
  * @enum ParameterPreset
  * @brief Predefined parameter sets for homomorphic encryption.
@@ -43,6 +38,7 @@ enum class ParameterPreset {
     /// @endcond
     IP0,
     IP1,
+    IP2,
 };
 
 /**
@@ -62,11 +58,19 @@ enum class EvalMode : uint8_t {
     FLAT,
     MM,
     SINGLE,
+    /// @cond INTERNAL
+    MMS,   // MM + shared-a
+    MM32,  // MM with IP2 (u32 coefficients)
+    MMS32, // MMS with IP2 (u32 coefficients)
+    /// @endcond
 };
 
-#define CHECK_SHARED_A(M) ((M) == evi::EvalMode::RMS || (M == evi::EvalMode::MS))
-#define CHECK_RMP(M) ((M) == evi::EvalMode::RMS || (M == evi::EvalMode::RMP))
-#define CHECK_MM(M) ((M) == evi::EvalMode::MM)
+#define CHECK_SHARED_A(M) ((M) == evi::EvalMode::RMS || (M) == evi::EvalMode::MS)
+#define CHECK_RMP(M) ((M) == evi::EvalMode::RMS || (M) == evi::EvalMode::RMP)
+#define CHECK_MM(M)                                                                                                    \
+    ((M) == evi::EvalMode::MM || (M) == evi::EvalMode::MMS || (M) == evi::EvalMode::MM32 || (M) == evi::EvalMode::MMS32)
+#define CHECK_MMS(M) ((M) == evi::EvalMode::MMS || (M) == evi::EvalMode::MMS32)
+#define CHECK_MM32(M) ((M) == evi::EvalMode::MM32 || (M) == evi::EvalMode::MMS32)
 
 enum class QueryType : uint8_t {
     SINGLE = 0,

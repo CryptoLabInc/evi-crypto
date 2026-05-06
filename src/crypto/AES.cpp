@@ -19,7 +19,8 @@
 #include "utils/crypto/AES.hpp"
 
 bool AES::encryptAESGCM(const std::vector<uint8_t> &plaintext, const std::vector<uint8_t> &key,
-                        std::vector<uint8_t> &iv, std::vector<uint8_t> &ciphertext, std::vector<uint8_t> &tag) {
+                        std::vector<uint8_t> &iv, std::vector<uint8_t> &ciphertext, std::vector<uint8_t> &tag,
+                        const std::vector<uint8_t> &aad) {
     if (key.size() != evi::detail::AES256_KEY_SIZE) {
         std::cerr << "Key size must be 256 bits (32 bytes)\n";
         return false;
@@ -44,9 +45,17 @@ bool AES::encryptAESGCM(const std::vector<uint8_t> &plaintext, const std::vector
         EVP_CIPHER_CTX_free(ctx);
         return false;
     }
+    if (!aad.empty()) {
+        int aad_len = 0;
+        if (EVP_EncryptUpdate(ctx, nullptr, &aad_len, aad.data(), static_cast<int>(aad.size())) != 1) {
+            std::cerr << "AAD binding failed\n";
+            EVP_CIPHER_CTX_free(ctx);
+            return false;
+        }
+    }
     int len = 0;
     ciphertext.resize(plaintext.size());
-    if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len, plaintext.data(), plaintext.size()) != 1) {
+    if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len, plaintext.data(), static_cast<int>(plaintext.size())) != 1) {
         std::cerr << "EncryptUpdate failed\n";
         EVP_CIPHER_CTX_free(ctx);
         return false;
@@ -70,7 +79,7 @@ bool AES::encryptAESGCM(const std::vector<uint8_t> &plaintext, const std::vector
 
 bool AES::decryptAESGCM(const std::vector<uint8_t> &ciphertext, const std::vector<uint8_t> &key,
                         const std::vector<uint8_t> &iv, std::vector<uint8_t> &plaintext,
-                        const std::vector<uint8_t> &tag) {
+                        const std::vector<uint8_t> &tag, const std::vector<uint8_t> &aad) {
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         std::cerr << "EVP_CIPHER_CTX_new failed\n";
@@ -86,9 +95,17 @@ bool AES::decryptAESGCM(const std::vector<uint8_t> &ciphertext, const std::vecto
         EVP_CIPHER_CTX_free(ctx);
         return false;
     }
+    if (!aad.empty()) {
+        int aad_len = 0;
+        if (EVP_DecryptUpdate(ctx, nullptr, &aad_len, aad.data(), static_cast<int>(aad.size())) != 1) {
+            std::cerr << "AAD binding failed\n";
+            EVP_CIPHER_CTX_free(ctx);
+            return false;
+        }
+    }
     int len = 0;
     plaintext.resize(ciphertext.size());
-    if (EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext.data(), ciphertext.size()) != 1) {
+    if (EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext.data(), static_cast<int>(ciphertext.size())) != 1) {
         std::cerr << "DecryptUpdate failed\n";
         EVP_CIPHER_CTX_free(ctx);
         return false;

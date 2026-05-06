@@ -24,8 +24,9 @@
 #include <random>
 #include <type_traits>
 
-static constexpr std::array<evi::ParameterPreset, 4> ALL_PRESETS = {
-    evi::ParameterPreset::IP0, evi::ParameterPreset::IP1, evi::ParameterPreset::QF0, evi::ParameterPreset::QF1};
+static constexpr std::array<evi::ParameterPreset, 5> ALL_PRESETS = {
+    evi::ParameterPreset::IP0, evi::ParameterPreset::IP1, evi::ParameterPreset::IP2, evi::ParameterPreset::QF0,
+    evi::ParameterPreset::QF1};
 evi::ParameterPreset get_random_preset() {
     static std::mt19937 gen{std::random_device{}()};
     std::uniform_int_distribution<size_t> dist(0, ALL_PRESETS.size() - 1);
@@ -55,6 +56,9 @@ std::string getParamToString(evi::ParameterPreset preset) {
         break;
     case evi::ParameterPreset::IP1:
         res = "IP1";
+        break;
+    case evi::ParameterPreset::IP2:
+        res = "IP2";
         break;
     case evi::ParameterPreset::QF1:
         res = "QF1";

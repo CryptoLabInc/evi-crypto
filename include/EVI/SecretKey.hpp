@@ -48,6 +48,15 @@ public:
      */
     SecretKey(std::shared_ptr<detail::SecretKey> impl) : impl_(std::move(impl)) {}
 
+    /// @brief Release this handle immediately.
+    void reset() noexcept;
+
+    /// @brief Open secret-key memory access for direct internal access paths.
+    void openAccess();
+
+    /// @brief Close secret-key memory access and restore protection.
+    void closeAccess();
+
 private:
     std::shared_ptr<detail::SecretKey> impl_;
 

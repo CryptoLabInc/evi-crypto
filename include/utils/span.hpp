@@ -22,6 +22,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <vector>

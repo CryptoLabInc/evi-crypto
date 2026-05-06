@@ -112,6 +112,25 @@ std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &dat
     return res;
 }
 
+std::vector<std::string> Encryptor::encryptRow(const std::vector<std::vector<float>> &data,
+                                               const std::string &enckey_path, evi::EncodeType type, int level,
+                                               std::optional<float> scale) const {
+    (*impl_)->loadEncKey(enckey_path);
+    return (*impl_)->encryptRow(data, type, level != 0, scale);
+}
+
+std::vector<std::string> Encryptor::encryptRow(const std::vector<std::vector<float>> &data, std::istream &enckey_stream,
+                                               evi::EncodeType type, int level, std::optional<float> scale) const {
+    (*impl_)->loadEncKey(enckey_stream);
+    return (*impl_)->encryptRow(data, type, level != 0, scale);
+}
+
+std::vector<std::string> Encryptor::encryptRow(const std::vector<std::vector<float>> &data, const KeyPack &keypack,
+                                               evi::EncodeType type, int level, std::optional<float> scale) const {
+    (*impl_)->loadEncKey(getImpl(keypack));
+    return (*impl_)->encryptRow(data, type, level != 0, scale);
+}
+
 Query Encryptor::encode(const std::vector<float> &data, evi::EncodeType type, int level,
                         std::optional<float> scale) const {
     return Query(std::make_shared<detail::Query>((*impl_)->encode(data, type, level, scale)));

@@ -158,6 +158,45 @@ public:
     std::vector<Query> encrypt(const std::vector<std::vector<float>> &data, const KeyPack &keypack,
                                evi::EncodeType type, int level, std::optional<float> scale = std::nullopt) const;
 
+    /**
+     * @brief Encrypts each row with the key file and returns serialized ciphertext strings.
+     * @param data List of input vectors to encrypt (row-wise).
+     * @param enckey_path Path to the encryption key material.
+     * @param type Encoding type (`ITEM` or `QUERY`).
+     * @param level Flag for DB scale usage (non-zero => DB scale).
+     * @param scale Optional custom scale factor.
+     * @return List of serialized ciphertext blobs.
+     */
+    std::vector<std::string> encryptRow(const std::vector<std::vector<float>> &data, const std::string &enckey_path,
+                                        evi::EncodeType type, int level = 0,
+                                        std::optional<float> scale = std::nullopt) const;
+
+    /**
+     * @brief Encrypts each row with the key stream and returns serialized ciphertext strings.
+     * @param data List of input vectors to encrypt (row-wise).
+     * @param enckey_stream Stream to the encryption key material.
+     * @param type Encoding type (`ITEM` or `QUERY`).
+     * @param level Flag for DB scale usage (non-zero => DB scale).
+     * @param scale Optional custom scale factor.
+     * @return List of serialized ciphertext blobs.
+     */
+    std::vector<std::string> encryptRow(const std::vector<std::vector<float>> &data, std::istream &enckey_stream,
+                                        evi::EncodeType type, int level = 0,
+                                        std::optional<float> scale = std::nullopt) const;
+
+    /**
+     * @brief Encrypts each row with the key pack and returns serialized ciphertext strings.
+     * @param data List of input vectors to encrypt (row-wise).
+     * @param keypack Key pack providing the encryption key.
+     * @param type Encoding type (`ITEM` or `QUERY`).
+     * @param level Flag for DB scale usage (non-zero => DB scale).
+     * @param scale Optional custom scale factor.
+     * @return List of serialized ciphertext blobs.
+     */
+    std::vector<std::string> encryptRow(const std::vector<std::vector<float>> &data, const KeyPack &keypack,
+                                        evi::EncodeType type, int level = 0,
+                                        std::optional<float> scale = std::nullopt) const;
+
     [[deprecated(
         "encrypt(data, type, level) will be removed soon; migrate to encrypt(data, keypack, type, level, scale)")]]
     Query encrypt(const std::vector<float> &data, evi::EncodeType type, int level = 0) const;

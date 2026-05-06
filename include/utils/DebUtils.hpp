@@ -24,6 +24,15 @@
 #include <deb/CKKSTypes.hpp>
 #include <deb/Preset.hpp>
 
+// Backward-compat aliases for deb types templated in deb-private #59
+namespace deb {
+using PolyUnit = PolyUnitT<u64>;
+using Polynomial = PolynomialT<u64>;
+using Ciphertext = CiphertextT<u64>;
+using SecretKey = SecretKeyT<u64>;
+using SwitchKey = SwitchKeyT<u64>;
+} // namespace deb
+
 namespace evi {
 namespace detail {
 namespace utils {
@@ -32,17 +41,29 @@ deb::Preset getDebPreset(const detail::Context &context);
 
 deb::Preset getDebPreset(const std::string &preset);
 
+deb::Size getDebNumP(const detail::Context &context);
+
+deb::Size getDebGadgetRank(const detail::Context &context);
+
+const deb::u64 *getDebPrimes(const detail::Context &context);
+
 std::optional<deb::RNGSeed> convertDebSeed(const std::optional<std::vector<u8>> &seed);
 
 bool syncFixedKeyToDebSwkKey(const detail::Context &context, const detail::FixedKeyType &fixed, deb::SwitchKey &swk);
 
-bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::VariadicKeyType &variad, deb::SwitchKey &swk);
+bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::VariadicKeyType &variadic,
+                           deb::SwitchKey &swk);
 
 deb::Ciphertext convertPointerToDebCipher(const detail::Context &context, detail::u64 *a_q, detail::u64 *b_q,
                                           detail::u64 *a_p = nullptr, detail::u64 *b_p = nullptr, bool is_ntt = true);
 
 deb::Ciphertext convertSingleCipherToDebCipher(const detail::Context &context,
                                                detail::SingleBlock<DataType::CIPHER> &cipher, bool is_ntt = true);
+
+deb::Preset getDebPreset(evi::ParameterPreset preset);
+
+deb::Ciphertext convertPointerToDebCipherWithPreset(evi::ParameterPreset preset, detail::u64 *a_q, detail::u64 *b_q,
+                                                    bool is_ntt = true);
 
 } // namespace utils
 } // namespace detail

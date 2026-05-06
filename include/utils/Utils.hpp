@@ -20,7 +20,9 @@
 
 #include "EVI/Enums.hpp"
 #include "EVI/impl/KeyGeneratorImpl.hpp"
+#include "nlohmann/json_fwd.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -48,9 +50,18 @@ SearchResult deserializeResultFrom(std::istream &is);
 std::string encodeToBase64(const std::vector<uint8_t> &data);
 std::string encodeToBase64(const std::string &str);
 std::vector<uint8_t> decodeBase64(const std::string &encoded);
+std::string timePointToIso8601UtcString(std::chrono::system_clock::time_point tp);
+std::chrono::system_clock::time_point iso8601UtcStringToTimePoint(const std::string &ts);
+std::string currentIso8601UtcString();
+bool isEnvelopeJson(const nlohmann::json &parsed);
+std::string encryptMetadata(const std::string &metadata, const std::vector<uint8_t> &key,
+                            const std::vector<uint8_t> &aad = {});
+std::string decryptMetadata(const std::string &encrypted, const std::vector<uint8_t> &key,
+                            const std::vector<uint8_t> &aad = {});
 
 evi::ParameterPreset stringToPreset(const std::string &str);
 evi::SealMode stringToSealMode(const std::string &str);
+evi::EvalMode stringToEvalMode(const std::string &str);
 
 std::string assignParameterString(evi::ParameterPreset preset);
 std::string assignEvalModeString(evi::EvalMode mode);
