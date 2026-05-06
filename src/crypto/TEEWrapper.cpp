@@ -19,6 +19,7 @@
 #include "utils/crypto/TEEWrapper.hpp"
 
 #include "utils/Utils.hpp"
+#include "utils/security/Security.hpp"
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -45,7 +46,9 @@ void TEEWrapper::saveSealedSecKey(std::ostream &os, evi::ParameterPreset preset,
     uint16_t obj_id = 0;
     char zero_bytes[2] = {0x00, 0x00};
     std::string sec_str = seckey.str();
+    evi::security::SensitiveDataGuard sec_str_guard(sec_str);
     std::vector<uint8_t> sec_key_vec(sec_str.begin(), sec_str.end());
+    evi::security::SensitiveDataGuard sec_key_vec_guard(sec_key_vec);
     std::vector<uint8_t> sealed_seckey(sec_str.size(), 0);
 
     AES::encryptAESGCM(sec_key_vec, kek, iv, sealed_seckey, tag);
@@ -107,7 +110,9 @@ void TEEWrapper::saveSealedSecKeyHSM(std::ostream &os, int32_t *preset, std::str
     uint16_t obj_id = 0;
     char zero_bytes[2] = {0x00, 0x00};
     std::string sec_str = seckey.str();
+    evi::security::SensitiveDataGuard sec_str_guard(sec_str);
     std::vector<uint8_t> sec_key_vec(sec_str.begin(), sec_str.end());
+    evi::security::SensitiveDataGuard sec_key_vec_guard(sec_key_vec);
     std::vector<uint8_t> sealed_seckey;
 
     hsmw_->GetWrapKek(&obj_id, kek.data(), kek.size(), &wrapKek[0], &wrapKekLen);

@@ -80,8 +80,12 @@ def string_to_eval_mode(eval_mode: str) -> evi.EvalMode:
         return evi.EvalMode.FLAT
     elif eval_mode == "rmp":
         return evi.EvalMode.RMP
+    elif eval_mode == "mm":
+        return evi.EvalMode.MM
+    elif eval_mode == "mms":
+        return evi.EvalMode.MMS
     else:
-        raise ValueError(f"Invalid evaluation mode: {eval_mode}. Choose from 'flat' or 'rmp'.")
+        raise ValueError(f"Invalid evaluation mode: {eval_mode}. Choose from 'flat', 'rmp', 'mm', or 'mms'.")
 
 
 def generate_key(dim_list, outdir, seal_info, preset, eval_mode):

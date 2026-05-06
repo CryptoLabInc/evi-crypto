@@ -20,7 +20,27 @@
 #include "EVI/impl/KeyGeneratorImpl.hpp"
 #include "EVI/impl/SecretKeyImpl.hpp"
 
+#include <stdexcept>
+
 namespace evi {
+
+void SecretKey::reset() noexcept {
+    impl_.reset();
+}
+
+void SecretKey::openAccess() {
+    if (!impl_ || !(*impl_)) {
+        throw std::logic_error("SecretKey impl is null");
+    }
+    (*impl_)->openAccess();
+}
+
+void SecretKey::closeAccess() {
+    if (!impl_ || !(*impl_)) {
+        throw std::logic_error("SecretKey impl is null");
+    }
+    (*impl_)->closeAccess();
+}
 
 SecretKey makeSecKey(const evi::Context &context) {
     return SecretKey(std::make_shared<detail::SecretKey>(detail::makeSecKey(*getImpl(context))));

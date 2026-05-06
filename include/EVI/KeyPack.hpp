@@ -22,6 +22,7 @@
 #include <iosfwd>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace evi {
 
@@ -101,7 +102,7 @@ private:
 
     /// @cond INTERNAL
     friend std::shared_ptr<detail::IKeyPack> &getImpl(KeyPack &) noexcept;
-    const friend std::shared_ptr<detail::IKeyPack> &getImpl(const KeyPack &) noexcept;
+    friend const std::shared_ptr<detail::IKeyPack> &getImpl(const KeyPack &) noexcept;
     /// @endcond
 };
 

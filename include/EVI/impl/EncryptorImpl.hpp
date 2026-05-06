@@ -47,6 +47,7 @@ public:
     virtual ~EncryptorInterface() = default;
     virtual void loadEncKey(const std::string &dir_path) = 0;
     virtual void loadEncKey(std::istream &in) = 0;
+    virtual void loadEncKey(const KeyPack &keypack) = 0;
 
     virtual Query encrypt(const span<float> msg, const EncodeType type = EncodeType::ITEM, const bool level = false,
                           std::optional<float> scale = std::nullopt) = 0;
@@ -81,6 +82,10 @@ public:
                                        const EncodeType type = EncodeType::ITEM, const bool level = false,
                                        std::optional<float> scale = std::nullopt) = 0;
 
+    virtual std::vector<std::string> encryptRow(const std::vector<std::vector<float>> &msg,
+                                                const EncodeType type = EncodeType::ITEM, const bool level = false,
+                                                std::optional<float> scale = std::nullopt) = 0;
+
     virtual Query encode(const span<float> msg, const EncodeType type = EncodeType::ITEM, const bool level = false,
                          std::optional<float> scale = std::nullopt) = 0;
 
@@ -111,12 +116,12 @@ public:
 
     void loadEncKey(const std::string &dir_path) override;
     void loadEncKey(std::istream &in) override;
-    void loadEncKey(const KeyPack &keypack);
+    void loadEncKey(const KeyPack &keypack) override;
 
     Query encrypt(const span<float> msg, const SecretKey &seckey, const EncodeType type = EncodeType::ITEM,
                   const bool level = false, std::optional<float> scale = std::nullopt) override;
     Query encrypt(const span<float> msg, const MultiSecretKey &seckey, const EncodeType type, const bool level,
-                  std::optional<float> scale);
+                  std::optional<float> scale) override;
     Query encrypt(const span<float> msg, const EncodeType type = EncodeType::ITEM, const bool level = false,
                   std::optional<float> scale = std::nullopt) override;
     Query encrypt(const span<float> msg, const std::string &enckey_path, const EncodeType type, const bool level,
@@ -140,6 +145,10 @@ public:
     std::vector<Query> encrypt(const std::vector<std::vector<float>> &msg, const KeyPack &keypack,
                                const EncodeType type = EncodeType::ITEM, const bool level = false,
                                std::optional<float> scale = std::nullopt) override;
+
+    std::vector<std::string> encryptRow(const std::vector<std::vector<float>> &msg,
+                                        const EncodeType type = EncodeType::ITEM, const bool level = false,
+                                        std::optional<float> scale = std::nullopt) override;
 
     std::vector<Query> encryptMM(const std::vector<std::vector<float>> &msg, const EncodeType type = EncodeType::ITEM,
                                  const bool level = false, std::optional<float> scale = std::nullopt);

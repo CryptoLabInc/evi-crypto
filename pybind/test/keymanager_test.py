@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pytest
 
@@ -45,3 +46,27 @@ def test_keymanager_stream_roundtrip(ctx, tmp_path):
     assert unwrapped_sec == sec_blob
     assert unwrapped_enc == enc_blob
     assert unwrapped_eval == eval_blob
+
+
+def test_revoke_and_destroy_pub_key_update_state_and_block_unwrap(key_manager, key_dir, tmp_path):
+    enc_key_path = Path(key_dir) / "EncKey.bin"
+    wrapped_path = tmp_path / "EncKey.lifecycle.json"
+    restored_path = tmp_path / "EncKey.lifecycle.out"
+
+    key_manager.wrap_enc_key("enc-lifecycle", str(enc_key_path), str(wrapped_path))
+    key_manager.deactivate_pub_key(str(wrapped_path), "rotation complete")
+
+    envelope = json.loads(wrapped_path.read_text())
+    assert envelope["state"]["value"] == "deactivated"
+    assert envelope["state"]["reason"] == "rotation complete"
+
+    with pytest.raises(Exception, match="deactivated"):
+        key_manager.unwrap_enc_key(str(wrapped_path), str(restored_path))
+
+    key_manager.destroy_pub_key(str(wrapped_path), "retired")
+    envelope = json.loads(wrapped_path.read_text())
+    assert envelope["state"]["value"] == "destroyed"
+    assert envelope["state"]["reason"] == "retired"
+
+    with pytest.raises(Exception, match="destroyed"):
+        key_manager.unwrap_enc_key(str(wrapped_path), str(restored_path))

@@ -60,6 +60,21 @@ void bind_keypack(py::module_ &m) {
                  return makeSecKey(path, std::optional<SealInfo>(s));
              }),
              py::arg("path"), py::arg("seal_info"))
+        .def(
+            "__enter__",
+            [](SecretKey &self) -> SecretKey & {
+                return self;
+            },
+            py::return_value_policy::reference_internal)
+        .def("__exit__",
+             [](SecretKey &self, py::object, py::object, py::object) {
+                 self.reset();
+                 return false;
+             })
+        .def("destroy", &SecretKey::reset, "Deterministically release secret-key memory")
+        .def("reset", &SecretKey::reset, "Alias of destroy()")
+        .def("open_access", &SecretKey::openAccess)
+        .def("close_access", &SecretKey::closeAccess)
 
         .def("__repr__", [](const SecretKey &) {
             return std::string("<evi.SecretKey>");

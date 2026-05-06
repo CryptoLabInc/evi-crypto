@@ -15,7 +15,12 @@
 # ~~~
 include(CPM)
 
-cpmaddpackage(NAME CLI11 GITHUB_REPOSITORY CLIUtils/CLI11 VERSION 2.4.0)
+# Guard: when built as a subdirectory of evi, CLI11 is already registered by
+# evi/external/CMakeLists.txt. Standalone crypto/ builds register it here. See
+# evi-monorepo-structure-v1.md §5.3.
+if(NOT TARGET CLI11 AND NOT TARGET CLI11::CLI11)
+  cpmaddpackage(NAME CLI11 GITHUB_REPOSITORY CLIUtils/CLI11 VERSION 2.4.0)
+endif()
 
 set(CLI11_TGT "")
 if(TARGET CLI11::CLI11)
@@ -24,38 +29,52 @@ elseif(TARGET CLI11)
   set(CLI11_TGT CLI11)
 endif()
 
-if(USE_PROFILE)
+if(USE_PROFILE AND NOT TARGET perfetto)
   cpmaddpackage(NAME perfetto GITHUB_REPOSITORY google/perfetto GIT_TAG v50.1)
   add_library(perfetto STATIC ${perfetto_SOURCE_DIR}/sdk/perfetto.cc)
   target_include_directories(perfetto PUBLIC ${perfetto_SOURCE_DIR}/sdk)
+endif()
+
+# On MSVC the C math library is part of the CRT; there is no separate 'm.lib'.
+# alea's CMakeLists.txt does target_link_libraries(alea PRIVATE m), which causes
+# LNK1181 on Windows.  Create a no-op 'm' interface target so CMake resolves the
+# name without searching for a non-existent library file.
+if(MSVC AND NOT TARGET m)
+  add_library(m INTERFACE IMPORTED)
 endif()
 
 set(DEB_PARAMETER_JSON
     "${CMAKE_CURRENT_SOURCE_DIR}/deb-param.json"
     CACHE STRING "" FORCE)
 set(DEB_MEMORY_ALIGN_SIZE_VALUE "${ALIGNMENT_BYTE}")
-if(MSVC)
-  # deb still uses std::aligned_alloc in one allocation path, which MSVC does
-  # not provide. Disable deb's explicit alignment there until upstream is fixed.
+if(WIN32)
+  # deb uses std::aligned_alloc when explicit alignment is enabled. MinGW and
+  # MSVC Windows builds do not consistently expose that C++17 API.
   set(DEB_MEMORY_ALIGN_SIZE_VALUE 0)
 endif()
 set(DEB_MEMORY_ALIGN_SIZE
     "${DEB_MEMORY_ALIGN_SIZE_VALUE}"
     CACHE STRING "" FORCE)
 
-cpmaddpackage(
-  NAME
-  deb
-  GITHUB_REPOSITORY
-  CryptoLabInc/deb
-  GIT_TAG
-  1b033edb63a335007039a52efab6acc59ab25a84 # deb 26.04.17 main (v0.3.1 + Win32)
-  OPTIONS
-  "DEB_BUILD_EXAMPLES OFF"
-  "DEB_BUILD_TEST OFF"
-  "DEB_BUILD_WITH_OMP OFF"
-  "DEB_INSTALL_ALEA ON"
-  "DEB_RUNTIME_RESOURCE_CHECK OFF")
+# Guard: in a monorepo build, `deb` is brought in transitively by hem
+# (registered from evi/external/). Standalone crypto/ builds register it here.
+# See evi-monorepo-structure-v1.md §5.3.
+if(NOT TARGET deb)
+  cpmaddpackage(
+    NAME
+    deb
+    GITHUB_REPOSITORY
+    CryptoLabInc/deb
+    GIT_TAG
+    de429000b1ca577596ac11e18d46319ff3052d7f # deb main (includes u32 support)
+    OPTIONS
+    "DEB_BUILD_EXAMPLES OFF"
+    "DEB_BUILD_TEST OFF"
+    "DEB_BUILD_WITH_OMP OFF"
+    "DEB_INSTALL_ALEA ON"
+    "DEB_RUNTIME_RESOURCE_CHECK OFF"
+    "DEB_SUPPORT_U32 ON")
+endif()
 
 # ---------------------------------------------------------
 # nlohmann_json

@@ -14,6 +14,7 @@
 #  limitations under the License.
 # ~~~
 cmake_minimum_required(VERSION 3.19)
+
 project(
   evi_crypto
   VERSION 1.0.0
@@ -49,6 +50,22 @@ option(BUILD_C_API "Build C language wrapper API" OFF)
 option(EVI_ENABLE_INSTALL "Generate install/export targets" OFF)
 option(HEM_BUILD_FOR_CLIENT
        "Propagate to HEM so it builds client-side components only" ON)
+option(EVI_KM_PREFER_AWS_SDK "Prefer AWS SDK for S3 key storage" OFF)
+option(EVI_KM_PREFER_GCP_SDK "Prefer google-cloud-cpp for GCS key storage" OFF)
+set(EVI_KM_AWS_SDK_GIT_TAG
+    "1.11.720"
+    CACHE STRING "aws-sdk-cpp git tag used when EVI_KM_PREFER_AWS_SDK=ON")
+
+if(BUILD_C_API)
+  message(
+    WARNING "BUILD_C_API=ON: AWS/GCP KeyManager SDK backends are disabled.")
+  set(EVI_KM_PREFER_AWS_SDK
+      OFF
+      CACHE BOOL "Prefer AWS SDK for S3 key storage" FORCE)
+  set(EVI_KM_PREFER_GCP_SDK
+      OFF
+      CACHE BOOL "Prefer google-cloud-cpp for GCS key storage" FORCE)
+endif()
 
 set(ALIGNMENT_BYTE
     "256"
@@ -74,22 +91,28 @@ if(BUILD_PYTHON)
   set(CMAKE_POSITION_INDEPENDENT_CODE
       ON
       CACHE BOOL "Enable PIC for Python artifacts" FORCE)
-  string(APPEND CMAKE_C_FLAGS " -fPIC")
-  string(APPEND CMAKE_CXX_FLAGS " -fPIC")
-  set(CMAKE_C_FLAGS
-      "${CMAKE_C_FLAGS}"
-      CACHE STRING "C flags" FORCE)
-  set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS}"
-      CACHE STRING "CXX flags" FORCE)
-  if(APPLE)
-    set(_origin "@loader_path")
-  else()
-    set(_origin "$ORIGIN")
+  # -fPIC is GCC/Clang only; MSVC always produces position-independent code.
+  if(NOT MSVC)
+    string(APPEND CMAKE_C_FLAGS " -fPIC")
+    string(APPEND CMAKE_CXX_FLAGS " -fPIC")
+    set(CMAKE_C_FLAGS
+        "${CMAKE_C_FLAGS}"
+        CACHE STRING "C flags" FORCE)
+    set(CMAKE_CXX_FLAGS
+        "${CMAKE_CXX_FLAGS}"
+        CACHE STRING "CXX flags" FORCE)
   endif()
-  set(CMAKE_INSTALL_RPATH "${_origin};${_origin}/lib;${_origin}/lib64")
-  set(CMAKE_BUILD_RPATH "${CMAKE_INSTALL_RPATH}")
-  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+  # Windows has no RPATH concept; DLLs are found via PATH or same-directory.
+  if(NOT WIN32)
+    if(APPLE)
+      set(_origin "@loader_path")
+    else()
+      set(_origin "$ORIGIN")
+    endif()
+    set(CMAKE_INSTALL_RPATH "${_origin};${_origin}/lib;${_origin}/lib64")
+    set(CMAKE_BUILD_RPATH "${CMAKE_INSTALL_RPATH}")
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+  endif()
 endif()
 
 message(STATUS "BUILD_TEST=${BUILD_TEST}")
@@ -101,6 +124,8 @@ message(STATUS "BUILD_PYTHON=${BUILD_PYTHON}")
 message(STATUS "BUILD_C_API=${BUILD_C_API}")
 message(STATUS "BUILD_WITH_CUDA=${BUILD_WITH_CUDA}")
 message(STATUS "HEM_BUILD_FOR_CLIENT=${HEM_BUILD_FOR_CLIENT}")
+message(STATUS "EVI_KM_PREFER_AWS_SDK=${EVI_KM_PREFER_AWS_SDK}")
+message(STATUS "EVI_KM_PREFER_GCP_SDK=${EVI_KM_PREFER_GCP_SDK}")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   add_compile_definitions(BUILD_DEBUG)
@@ -116,6 +141,7 @@ set(EVI_CORE_SOURCES
     src/Context.cpp
     src/Message.cpp
     src/Sampler.cpp
+    src/Bitpack.cpp
     src/CKKSTypes.cpp
     src/Query.cpp
     src/SearchResult.cpp
@@ -159,9 +185,25 @@ list(APPEND ENC_DEC_SRCS ${EVI_SRCS})
 set(PROJECT_MAIN_SRCS ${KEYGEN_SRCS} ${ENC_DEC_SRCS})
 
 if(BUILD_KEY_MANAGEMENT)
-  list(APPEND PROJECT_MAIN_SRCS src/km/KeyManager.cpp src/km/KeyManagerImpl.cpp
-       src/km/KeyProviderImpl.cpp)
+  list(
+    APPEND
+    PROJECT_MAIN_SRCS
+    src/km/KeyManager.cpp
+    src/km/KeyManagerImpl.cpp
+    src/km/KeyManagerCommon.cpp
+    src/km/KeyEnvelope.cpp
+    src/km/KeyManagerVault.cpp
+    src/km/KeyManagerAws.cpp
+    src/km/KeyManagerGcp.cpp
+    src/km/HttpClient.cpp
+    src/km/KeyProviderImpl.cpp
+    src/km/KeyProviderCommon.cpp
+    src/km/KeyStorageConfig.cpp
+    src/km/audit/AuditStore.cpp)
 endif()
+
+# Security hardening (GAP-011): process hardening + secure memory primitives
+list(APPEND PROJECT_MAIN_SRCS src/security/Security.cpp)
 
 if(BUILD_AS_STATIC)
   add_library(${PROJECT_LIB_NAME} STATIC ${PROJECT_MAIN_SRCS})
@@ -223,6 +265,101 @@ if(_PRIVATE_EXTERNAL_LIBS)
   target_link_libraries(${PROJECT_LIB_NAME} PRIVATE ${_PRIVATE_EXTERNAL_LIBS})
 endif()
 target_compile_definitions(${PROJECT_LIB_NAME} PUBLIC ${COMPILE_OPTION})
+
+# Key management remote providers: prefer official SDKs when available.
+if(BUILD_KEY_MANAGEMENT AND EVI_KM_PREFER_AWS_SDK)
+  set(_evi_aws_external_prefix "${CMAKE_BINARY_DIR}/_deps/aws-sdk-install")
+  set(_evi_aws_lib_suffix "${CMAKE_SHARED_LIBRARY_SUFFIX}")
+  set(_evi_aws_curl_cmake_args)
+  if(DEFINED CURL_INCLUDE_DIR AND DEFINED CURL_LIBRARY)
+    list(APPEND _evi_aws_curl_cmake_args
+         "-DCURL_INCLUDE_DIR=${CURL_INCLUDE_DIR}"
+         "-DCURL_LIBRARY=${CURL_LIBRARY}")
+    message(
+      STATUS
+        "Forwarding curl to aws-sdk-cpp external build: include=${CURL_INCLUDE_DIR}, lib=${CURL_LIBRARY}"
+    )
+  endif()
+  include(ExternalProject)
+
+  message(
+    STATUS
+      "Building aws-sdk-cpp externally (${EVI_KM_AWS_SDK_GIT_TAG}) with BUILD_ONLY=s3;secretsmanager"
+  )
+  ExternalProject_Add(
+    evi_aws_sdk_external
+    GIT_REPOSITORY https://github.com/aws/aws-sdk-cpp.git
+    GIT_TAG ${EVI_KM_AWS_SDK_GIT_TAG}
+    GIT_SHALLOW TRUE
+    UPDATE_DISCONNECTED TRUE
+    PREFIX "${CMAKE_BINARY_DIR}/_deps/aws-sdk"
+    INSTALL_DIR "${_evi_aws_external_prefix}"
+    CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release
+               -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+               -DENABLE_TESTING=OFF
+               -DBUILD_SHARED_LIBS=ON
+               -DCMAKE_DISABLE_FIND_PACKAGE_s2n=ON
+               -DCMAKE_INSTALL_LIBDIR=lib
+               -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+               ${_evi_aws_curl_cmake_args}
+    CMAKE_CACHE_ARGS "-DBUILD_ONLY:STRING=s3\\;secretsmanager"
+    BUILD_BYPRODUCTS
+      "${_evi_aws_external_prefix}/lib/libaws-cpp-sdk-s3${_evi_aws_lib_suffix}"
+      "${_evi_aws_external_prefix}/lib/libaws-cpp-sdk-secretsmanager${_evi_aws_lib_suffix}"
+      "${_evi_aws_external_prefix}/lib/libaws-cpp-sdk-core${_evi_aws_lib_suffix}"
+  )
+
+  # Always use the externally built SDK for both S3 and Secrets Manager.
+  target_compile_definitions(${PROJECT_LIB_NAME} PRIVATE EVI_KM_USE_AWS_SDK=1)
+  target_compile_definitions(${PROJECT_LIB_NAME}
+                             PRIVATE EVI_KM_USE_AWS_SECRETSMANAGER_SDK=1)
+  target_include_directories(${PROJECT_LIB_NAME}
+                             PRIVATE "${_evi_aws_external_prefix}/include")
+  # Distros can install shared libs to either lib or lib64.
+  target_link_directories(
+    ${PROJECT_LIB_NAME} PRIVATE "${_evi_aws_external_prefix}/lib"
+    "${_evi_aws_external_prefix}/lib64")
+  target_link_libraries(
+    ${PROJECT_LIB_NAME}
+    PRIVATE
+      "${_evi_aws_external_prefix}/lib/libaws-cpp-sdk-s3${_evi_aws_lib_suffix}"
+      "${_evi_aws_external_prefix}/lib/libaws-cpp-sdk-secretsmanager${_evi_aws_lib_suffix}"
+      "${_evi_aws_external_prefix}/lib/libaws-cpp-sdk-core${_evi_aws_lib_suffix}"
+  )
+  add_dependencies(${PROJECT_LIB_NAME} evi_aws_sdk_external)
+endif()
+
+if(BUILD_KEY_MANAGEMENT AND EVI_KM_PREFER_GCP_SDK)
+  # Try multiple package names / configs depending on installation method.
+  find_package(google-cloud-cpp CONFIG QUIET)
+  find_package(google_cloud_cpp_storage CONFIG QUIET)
+  find_package(google_cloud_cpp_secretmanager CONFIG QUIET)
+
+  set(_gcp_storage_target "")
+  set(_gcp_secretmanager_target "")
+  if(TARGET google-cloud-cpp::storage)
+    set(_gcp_storage_target google-cloud-cpp::storage)
+  elseif(TARGET google_cloud_cpp::storage)
+    set(_gcp_storage_target google_cloud_cpp::storage)
+  endif()
+  if(TARGET google-cloud-cpp::secretmanager)
+    set(_gcp_secretmanager_target google-cloud-cpp::secretmanager)
+  elseif(TARGET google_cloud_cpp::secretmanager)
+    set(_gcp_secretmanager_target google_cloud_cpp::secretmanager)
+  endif()
+
+  if(_gcp_storage_target AND _gcp_secretmanager_target)
+    target_compile_definitions(${PROJECT_LIB_NAME} PRIVATE EVI_KM_USE_GCP_SDK=1)
+    target_link_libraries(
+      ${PROJECT_LIB_NAME} PRIVATE ${_gcp_storage_target}
+                                  ${_gcp_secretmanager_target})
+  else()
+    message(
+      WARNING
+        "google-cloud-cpp storage+secretmanager not found; GCP provider will be disabled at runtime (requires EVI_KM_USE_GCP_SDK)"
+    )
+  endif()
+endif()
 
 # Include directories - Project's public headers
 target_include_directories(

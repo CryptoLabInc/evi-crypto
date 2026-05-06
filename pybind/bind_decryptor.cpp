@@ -31,9 +31,11 @@
 #include "EVI/Query.hpp"
 #include "EVI/SearchResult.hpp"
 #include "EVI/SecretKey.hpp"
+#include "utils/security/Security.hpp"
 
 namespace py = pybind11;
 using namespace evi;
+using evi::security::SensitiveDataGuard;
 
 std::string bytes_like_to_string(const py::object &obj) {
     if (!PyObject_CheckBuffer(obj.ptr())) {
@@ -85,6 +87,7 @@ void bind_decryptor(py::module_ &m) {
             [](Decryptor &self, const SearchResult &item, const py::object &key_blob, bool is_score,
                std::optional<double> scale) {
                 std::string blob = bytes_like_to_string(key_blob);
+                SensitiveDataGuard guard(blob);
                 std::istringstream key_stream(blob, std::ios::binary);
                 return self.decrypt(item, key_stream, is_score, scale);
             },
@@ -108,6 +111,7 @@ void bind_decryptor(py::module_ &m) {
             "decrypt_query_with_key_stream",
             [](Decryptor &self, const Query &ctxt, const py::object &key_blob, std::optional<double> scale) {
                 std::string blob = bytes_like_to_string(key_blob);
+                SensitiveDataGuard guard(blob);
                 std::istringstream key_stream(blob, std::ios::binary);
                 return self.decrypt(ctxt, key_stream, scale);
             },

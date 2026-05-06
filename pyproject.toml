@@ -9,7 +9,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "evi"
-version = "1.0.1"
+version = "1.0.3"
 description = "Encrypted Vector Index library"
 requires-python = ">=3.9,<3.14"
 urls = { "Homepage" = "https://github.com/CryptoLabInc/evi" }

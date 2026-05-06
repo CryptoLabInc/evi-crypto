@@ -25,9 +25,11 @@
 #include "EVI/Enums.hpp"
 #include "EVI/KeyGenerator.hpp"
 #include "EVI/SealInfo.hpp"
+#include "utils/security/Security.hpp"
 
 namespace py = pybind11;
 using namespace evi;
+using evi::security::wipeBuffer;
 
 static inline std::optional<std::vector<uint8_t>> to_opt_bytes_vec(const py::object &obj) {
     if (obj.is_none())
@@ -79,13 +81,23 @@ void bind_key_generator(py::module_ &m) {
              [](MultiKeyGenerator &self) {
                  std::ostringstream os(std::ios::binary);
                  auto secret = self.generateKeys(os);
-                 return py::make_tuple(secret, py::bytes(os.str()));
+                 std::string bundle = os.str();
+                 py::bytes out(bundle.data(), bundle.size());
+                 wipeBuffer(bundle);
+                 return py::make_tuple(secret, out);
              })
         .def("generate_keys_per_stream", [](MultiKeyGenerator &self) {
             std::ostringstream sec(std::ios::binary);
             std::ostringstream enc(std::ios::binary);
             std::ostringstream eval(std::ios::binary);
             auto secret = self.generateKeys(sec, enc, eval);
-            return py::make_tuple(secret, py::bytes(sec.str()), py::bytes(enc.str()), py::bytes(eval.str()));
+            std::string sec_s = sec.str();
+            std::string enc_s = enc.str();
+            std::string eval_s = eval.str();
+            py::tuple out =
+                py::make_tuple(secret, py::bytes(sec_s.data(), sec_s.size()), py::bytes(enc_s.data(), enc_s.size()),
+                               py::bytes(eval_s.data(), eval_s.size()));
+            wipeBuffer(sec_s);
+            return out;
         });
 }

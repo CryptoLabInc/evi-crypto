@@ -23,11 +23,13 @@
 #include "EVI/Enums.hpp"
 #include "EVI/impl/CKKSTypes.hpp"
 #include "EVI/impl/DecryptorImpl.hpp"
+#include "EVI/impl/Parameter.hpp"
 #include "nlohmann/json.hpp"
 #include "utils/DebUtils.hpp"
 #include "utils/Exceptions.hpp"
 #include "utils/Utils.hpp"
 #include <cmath>
+#include <deb/SecretKeyGenerator.hpp>
 #include <fstream>
 
 using json = nlohmann::json;
@@ -68,6 +70,7 @@ Message DecryptorFLAT::decrypt(const SearchResult ip_res, const SecretKey &key, 
     if (!key->sec_loaded_) {
         throw evi::DecryptionError("Secret key is not loaded to DecryptorImpl!");
     }
+    SecretKeyAccessScope key_access(key);
 
     auto &ctxt = ip_res->ip_data;
     if (!ctxt->getPoly(0, 0).size()) {
@@ -85,26 +88,31 @@ Message DecryptorFLAT::decrypt(const SearchResult ip_res, const SecretKey &key, 
         if (!ctxt->getLevel()) {
             deb::Ciphertext deb_ctxt = utils::convertPointerToDebCipher(context_, ctxt->getPoly(1, 0).data() + offset,
                                                                         ctxt->getPoly(0, 0).data() + offset);
-            deb_dec_.decrypt(deb_ctxt, key->deb_sk_, buf, scale_factor);
+            deb_dec_.decrypt(deb_ctxt, key->getDebSecKey(), buf, scale_factor);
         } else {
             deb::Ciphertext deb_ctxt = utils::convertPointerToDebCipher(
                 context_, ctxt->getPoly(1, 0).data() + offset, ctxt->getPoly(0, 0).data() + offset,
                 ctxt->getPoly(1, 1).data() + offset, ctxt->getPoly(0, 1).data() + offset);
-            deb_dec_.decrypt(deb_ctxt, key->deb_sk_, buf, scale_factor);
+            deb_dec_.decrypt(deb_ctxt, key->getDebSecKey(), buf, scale_factor);
         }
 
-        if (context_->getEvalMode() == EvalMode::SINGLE) {
-            res.push_back(buf[context_->getPadRank() - 1]);
+        if (is_score) {
+            const u64 items_per_ctxt = context_->getItemsPerCtxt();
+            const u64 pad_rank = context_->getPadRank();
+            const u64 item_count = ctxt->n ? ctxt->n : items_per_ctxt;
+            float tmp;
+            if (context_->getEvalMode() == EvalMode::SINGLE) {
+                res.push_back(buf[pad_rank - 1]);
+            } else {
+                for (u64 j = 0; j < ctxt->n; ++j) {
+                    tmp = buf[(j % context_->getItemsPerCtxt()) * context_->getPadRank() +
+                              j / context_->getItemsPerCtxt()];
+                    res.push_back(tmp);
+                }
+            }
         } else {
             for (u64 j = 0; j < DEGREE; ++j) {
-                float tmp;
-                if (is_score) {
-                    tmp =
-                        buf[j % context_->getItemsPerCtxt() * context_->getPadRank() + j / context_->getItemsPerCtxt()];
-                } else {
-                    tmp = buf[j];
-                }
-                res.push_back(tmp);
+                res.push_back(buf[j]);
             }
         }
     }
@@ -126,6 +134,7 @@ Message DecryptorFLAT::decrypt(const Query &ctxt, const SecretKey &key, std::opt
     if (!key->sec_loaded_) {
         throw evi::DecryptionError("Secret key is not loaded to DecryptorImpl!");
     }
+    SecretKeyAccessScope key_access(key);
 
     Message res(DEGREE, 0.0f);
     double scale_factor = std::pow(2, context_->getParam()->getScaleFactor());
@@ -138,12 +147,12 @@ Message DecryptorFLAT::decrypt(const Query &ctxt, const SecretKey &key, std::opt
         if (ctxt[i]->getLevel() == 0) {
             deb::Ciphertext deb_ctxt = utils::convertPointerToDebCipher(context_, ctxt[i]->getPoly(1, 0).data(),
                                                                         ctxt[i]->getPoly(0, 0).data());
-            deb_dec_.decrypt(deb_ctxt, key->deb_sk_, tmp_msg, scale_factor);
+            deb_dec_.decrypt(deb_ctxt, key->getDebSecKey(), tmp_msg, scale_factor);
         } else {
             deb::Ciphertext deb_ctxt =
                 utils::convertPointerToDebCipher(context_, ctxt[i]->getPoly(1, 0).data(), ctxt[i]->getPoly(0, 0).data(),
                                                  ctxt[i]->getPoly(1, 1).data(), ctxt[i]->getPoly(0, 1).data());
-            deb_dec_.decrypt(deb_ctxt, key->deb_sk_, tmp_msg, scale_factor);
+            deb_dec_.decrypt(deb_ctxt, key->getDebSecKey(), tmp_msg, scale_factor);
         }
 
         u64 size = ctxt[i]->dim;
@@ -173,6 +182,7 @@ Message DecryptorRMP::decrypt(const int idx, const Query &ctxt, const SecretKey 
     if (!key->sec_loaded_) {
         throw evi::DecryptionError("Secret key is not loaded to DecryptorInterface!");
     }
+    SecretKeyAccessScope key_access(key);
     Message res(DEGREE, 0.0f);
     double scale_factor = std::pow(2, context_->getParam()->getScaleFactor());
     if (scale.has_value()) {
@@ -184,12 +194,12 @@ Message DecryptorRMP::decrypt(const int idx, const Query &ctxt, const SecretKey 
         if (ctxt[i]->getLevel() == 0) {
             deb::Ciphertext deb_ctxt = utils::convertPointerToDebCipher(context_, ctxt[i]->getPoly(1, 0).data(),
                                                                         ctxt[i]->getPoly(0, 0).data());
-            deb_dec_.decrypt(deb_ctxt, key->deb_sk_, tmp_msg, scale_factor);
+            deb_dec_.decrypt(deb_ctxt, key->getDebSecKey(), tmp_msg, scale_factor);
         } else {
             deb::Ciphertext deb_ctxt =
                 utils::convertPointerToDebCipher(context_, ctxt[i]->getPoly(1, 0).data(), ctxt[i]->getPoly(0, 0).data(),
                                                  ctxt[i]->getPoly(1, 1).data(), ctxt[i]->getPoly(0, 1).data());
-            deb_dec_.decrypt(deb_ctxt, key->deb_sk_, tmp_msg, scale_factor);
+            deb_dec_.decrypt(deb_ctxt, key->getDebSecKey(), tmp_msg, scale_factor);
         }
 
         u64 size = ctxt[i]->dim;
@@ -230,6 +240,7 @@ Message DecryptorMM::decrypt(const SearchResult ip_res, const std::string &key_p
 
 Message DecryptorMM::decrypt(const SearchResult ctxts, const evi::detail::SecretKey &seckey, bool is_score,
                              std::optional<double> scale) {
+    SecretKeyAccessScope key_access(seckey);
 
     auto &matrix = ctxts->ip_data;
     if (!matrix->getPoly(0, 0).size()) {
@@ -237,15 +248,49 @@ Message DecryptorMM::decrypt(const SearchResult ctxts, const evi::detail::Secret
     }
 
     const int level = matrix->getLevel();
+
+    // Detect base conversion: IData::preset holds the prime space the
+    // ciphertext's coefficients are in (set by compute after base conversion,
+    // RUNTIME if no conversion). ctx_preset is the encryption preset —
+    // the Decryptor context must always match what was used to encrypt.
+    const auto ctx_preset = context_->getParam()->getPreset();
+    const auto res_preset = matrix->preset;
+    const bool is_base_converted = res_preset != ParameterPreset::RUNTIME && res_preset != ctx_preset;
+
+    // Auto-compute scale bits for the decoded plaintext.
+    //
+    // Two cases:
+    //   1. Rescale-only (or level > 0): use context SCALE_FACTOR (existing path).
+    //   2. Base-converted: base conversion multiplies raw values by
+    //      Q_target / (Q_ctx * P_ctx) instead of rescaling by P_ctx.
+    //      Result scale = DB_SCALE + log2(Q_target / (Q_ctx * P_ctx)) + QUERY_SCALE.
     double delta = 0.0;
     double scale_bits = 0.0;
 
-    if (context_->getParam()->getPreset() == evi::ParameterPreset::IP1 && level == 0) {
+    if (is_base_converted) {
+        const auto res_param = setPreset(res_preset);
+        const double q_target = static_cast<double>(res_param->getPrimeQ());
+        const double q_ctx = static_cast<double>(context_->getParam()->getPrimeQ());
+        const double p_ctx = static_cast<double>(context_->getParam()->getPrimeP());
+        const double db_scale = context_->getParam()->getDBScaleFactor();
+        const double query_scale = context_->getParam()->getQueryScaleFactor();
+        scale_bits = db_scale + std::log2(q_target / (q_ctx * p_ctx)) + query_scale;
+    } else if ((ctx_preset == evi::ParameterPreset::IP1 || ctx_preset == evi::ParameterPreset::IP2) && level == 0) {
         scale_bits = context_->getParam()->getScaleFactor();
     } else {
         scale_bits = context_->getParam()->getScaleFactor() * 2;
     }
     delta = scale.value_or(std::pow(2.0, scale_bits));
+
+    // For base-converted results, decrypt with the target preset's deb
+    // decryptor so that b + s*a is computed mod the correct modulus.
+    std::optional<deb::Decryptor> bc_dec;
+    std::optional<deb::SecretKey> bc_sk;
+    if (is_base_converted) {
+        const auto deb_preset = utils::getDebPreset(res_preset);
+        bc_dec.emplace(deb_preset);
+        bc_sk.emplace(deb::SecretKeyGenerator::GenSecretKeyFromCoeff(deb_preset, seckey->getDebSecKey().coeffs()));
+    }
 
     const size_t rows = static_cast<size_t>(matrix->dim);
     size_t item_count = ctxts.getTotalItemCount() / DEGREE;
@@ -269,8 +314,13 @@ Message DecryptorMM::decrypt(const SearchResult ctxts, const evi::detail::Secret
             u64 *a_lvl1 = level ? a_lvl1_base + poly_idx * DEGREE : nullptr;
             u64 *b_lvl1 = level ? b_lvl1_base + poly_idx * DEGREE : nullptr;
 
-            auto deb_ctxt = utils::convertPointerToDebCipher(context_, a_lvl0, b_lvl0, a_lvl1, b_lvl1, false);
-            deb_dec_.decrypt(deb_ctxt, seckey->deb_sk_, dmsg, delta);
+            if (is_base_converted) {
+                auto deb_ctxt = utils::convertPointerToDebCipherWithPreset(res_preset, a_lvl0, b_lvl0, false);
+                bc_dec->decrypt(deb_ctxt, *bc_sk, dmsg, delta);
+            } else {
+                auto deb_ctxt = utils::convertPointerToDebCipher(context_, a_lvl0, b_lvl0, a_lvl1, b_lvl1, false);
+                deb_dec_.decrypt(deb_ctxt, seckey->getDebSecKey(), dmsg, delta);
+            }
 
             float *dst = msgs.data() + (row * item_count + item) * DEGREE;
             for (u64 k = 0; k < DEGREE; ++k) {
@@ -293,13 +343,26 @@ Message DecryptorMM::decrypt(const Query &ctxts, const std::string &key_path, st
 }
 
 Message DecryptorMM::decrypt(const Query &ctxts, const SecretKey &seckey, std::optional<double> scale) {
+    SecretKeyAccessScope key_access(seckey);
     const u64 rows = static_cast<u64>(ctxts.size());
+    if (!rows) {
+        throw evi::InvalidInputError("Matrix query is empty");
+    }
 
     const u64 inner_count = static_cast<u64>(ctxts.getInnerItemCount());
     const u64 cols = inner_count ? inner_count : static_cast<u64>(DEGREE);
     const u32 msg_dim = context_->getShowRank();
     Message msgs(cols * msg_dim, 0.0f);
-    double delta = scale.value_or(std::pow(2.0, context_->getParam()->getScaleFactor()));
+
+    double delta = 0.0;
+    if (scale.has_value()) {
+        delta = scale.value();
+    } else if (ctxts[0]->encode_type == EncodeType::ITEM) {
+        // MM bulk ITEM encryption uses the DB scale for level-1 ciphertexts.
+        delta = std::pow(2.0, context_->getParam()->getDBScaleFactor());
+    } else {
+        delta = std::pow(2.0, context_->getParam()->getScaleFactor());
+    }
 
     deb::CoeffMessage tmp_msg(DEGREE);
     const u64 stride = msg_dim;
@@ -318,7 +381,7 @@ Message DecryptorMM::decrypt(const Query &ctxts, const SecretKey &seckey, std::o
                                                    nullptr, nullptr, false)
                 : utils::convertPointerToDebCipher(context_, block->getPoly(1, 0).data(), block->getPoly(0, 0).data(),
                                                    block->getPoly(1, 1).data(), block->getPoly(0, 1).data(), false);
-        deb_dec_.decrypt(deb_ctxt, seckey->deb_sk_, tmp_msg, delta);
+        deb_dec_.decrypt(deb_ctxt, seckey->getDebSecKey(), tmp_msg, delta);
 
         for (u64 col = 0; col < active_cols; ++col) {
             msgs[col * stride + row] = static_cast<float>(tmp_msg[col]);
@@ -334,7 +397,8 @@ Decryptor makeDecryptor(const Context &context) {
         return Decryptor(std::make_shared<DecryptorFLAT>(context));
     } else if (context->getEvalMode() == EvalMode::RMP) {
         return Decryptor(std::make_shared<DecryptorRMP>(context));
-    } else if (context->getEvalMode() == EvalMode::MM) {
+    } else if (context->getEvalMode() == EvalMode::MM || context->getEvalMode() == EvalMode::MMS ||
+               context->getEvalMode() == EvalMode::MM32 || context->getEvalMode() == EvalMode::MMS32) {
         return Decryptor(std::make_shared<DecryptorMM>(context));
     } else {
         throw InvalidAccessError("invalid access");

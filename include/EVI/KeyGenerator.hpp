@@ -65,6 +65,17 @@ public:
      */
     KeyPack genPubKeys(SecretKey &sec_key);
 
+    /**
+     * @brief Generates shared-A keys for RMS (shared-a) mode.
+     *
+     * Generates all four shared-A key types required for RMS evaluation:
+     * SharedASwitchKey, AdditiveSharedASwitchKey, SharedAModPackKey, CCSharedAModPackKey.
+     *
+     * @param sec_from The main secret key.
+     * @param sec_to Vector of additional secret keys (one per pad_rank dimension).
+     */
+    void genSharedAKeys(SecretKey &sec_from, const std::vector<SecretKey> &sec_to);
+
 private:
     std::shared_ptr<detail::KeyGenerator> impl_;
 };
@@ -145,6 +156,15 @@ public:
      * @return The generated `SecretKey` object.
      */
     SecretKey generateKeys(std::ostream &seckey, std::ostream &enckey, std::ostream &evalkey);
+
+    /**
+     * @brief Generates encryption/evaluation keys from an existing secret key.
+     * @param seckey Secret key used to derive the public key material.
+     * @param enckey Output stream receiving the encryption key.
+     * @param evalkey Output stream receiving the evaluation key bundle.
+     * @return The provided `SecretKey` object.
+     */
+    SecretKey generateKeys(SecretKey &seckey, std::ostream &enckey, std::ostream &evalkey);
 
 private:
     std::shared_ptr<detail::MultiKeyGenerator> impl_;

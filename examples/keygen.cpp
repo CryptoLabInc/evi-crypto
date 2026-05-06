@@ -34,6 +34,20 @@ using json = nlohmann::json;
 
 bool checkContinue();
 
+// Key Size (bytes):
+//   - SecKey.bin  : 1029
+//   - EncKey.bin
+//       * FLAT, RMP        : 108,556
+//       * MM*              : 69,644
+//   - EvalKey.bin :
+//       * FLAT  (ip0, ip1) : 1,070,596,571
+//       * RMP   (ip0, ip1) : 10,637,610
+//       * MM    (ip0)      : 444,596,493
+//       * MM    (ip1)      : 889,192,718
+//       * MM32  (ip1)      : 892,231,955
+//       * MMS   (ip1)      : 889,192,718
+//       * MMS32 (ip1)      : 892,231,955
+
 int main(int argc, char **argv) {
     CLI::App app;
 
@@ -54,7 +68,7 @@ int main(int argc, char **argv) {
     auto auth_pw_opt = app.add_option("-w, --auth-pw", auth_pw, "HSM auth pw");
 
     std::string mode = "";
-    app.add_option("-e, --eval-mode", mode, "Select evaluation mode: NONE/RMP/RMS/MS defualt is RMP")
+    app.add_option("-e, --eval-mode", mode, "Select evaluation mode: FLAT/SINGLE/RMP/RMS/MS/MM defualt is RMP")
         ->default_val("RMP");
 
     CLI11_PARSE(app, argc, argv);
@@ -80,16 +94,20 @@ int main(int argc, char **argv) {
     evi::EvalMode mode_t;
     if (mode == "RMP") {
         mode_t = evi::EvalMode::RMP;
-    } else if (mode == "NONE") {
+    } else if (mode == "NONE" || mode == "FLAT") {
         mode_t = evi::EvalMode::FLAT;
-    } else if (mode == "RMS") {
-        mode_t = evi::EvalMode::RMS;
-    } else if (mode == "MS") {
-        mode_t = evi::EvalMode::MS;
+    } else if (mode == "SINGLE") {
+        mode_t = evi::EvalMode::SINGLE;
     } else if (mode == "MM") {
         mode_t = evi::EvalMode::MM;
+    } else if (mode == "MMS") {
+        mode_t = evi::EvalMode::MMS;
+    } else if (mode == "MM32") {
+        mode_t = evi::EvalMode::MM32;
+    } else if (mode == "MMS32") {
+        mode_t = evi::EvalMode::MMS32;
     } else {
-        std::cerr << "Unsupported eval mode. Select from NONE/RMP/RMS/MS/MM" << std::endl;
+        std::cerr << "Unsupported eval mode. Select from NONE(FLAT)/RMP/MM/MMS/MM32/MMS32" << std::endl;
         return 1;
     }
 
@@ -125,7 +143,6 @@ int main(int argc, char **argv) {
     // generate key
     evi::ParameterPreset preset = evi::Utils::stringToPreset(preset_str);
     std::cout << "Target Key path: " << store_path << std::endl;
-    // evi::MultiKeyGenerator keygen(store_path, preset, s_info, ranks);
     std::vector<evi::Context> contexts = makeMultiContext(preset, evi::DeviceType::CPU, mode_t);
 
     evi::MultiKeyGenerator keygen(contexts, store_path, s_info);
@@ -141,6 +158,10 @@ int main(int argc, char **argv) {
         std::cout << "Generate keys AES-KEK mode " << std::endl;
     }
     auto sec_key = keygen.generateKeys();
+
+    evi::KeyPack keypack = makeKeyPack(contexts[0]);
+    keypack.loadEncKey(store_path + "/EncKey.bin");
+
     std::cout << "Saving to target directory" << std::endl;
     std::cout << "Done!" << std::endl;
 

@@ -43,6 +43,10 @@ public:
         return "EviError";
     }
 
+    virtual const char *auditCode() const noexcept {
+        return "";
+    }
+
     const char *what() const noexcept override {
         static std::string full_message;
         std::ostringstream oss;
@@ -75,9 +79,9 @@ private:
     }
 
     template <typename... Args>
-    static std::string concat(Args &&...args) {
+    static std::string concat(Args... args) {
         std::ostringstream oss;
-        (appendArg(oss, std::forward<Args>(args)), ...);
+        (oss << ... << args);
         return oss.str();
     }
 };
@@ -134,6 +138,23 @@ public:
     const char *errorName() const override {
         return "InvalidInputError";
     }
+};
+
+class AuditCodedError : public InvalidInputError {
+public:
+    AuditCodedError(std::string code, const std::string &message)
+        : InvalidInputError(message), code_(std::move(code)) {}
+
+    const char *errorName() const override {
+        return "InvalidInputError";
+    }
+
+    const char *auditCode() const noexcept override {
+        return code_.c_str();
+    }
+
+private:
+    std::string code_;
 };
 
 class InvalidAccessError : public EviError {

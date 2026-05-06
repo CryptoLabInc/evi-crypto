@@ -251,27 +251,24 @@ TEST_F(EnDecryptTest, MultiKeyGenSeDeserializeEnDecTest) {
     EXPECT_LE(maxError(dmsg, msg), MAX_ERROR);
 }
 
-TEST_F(EnDecryptTest, InvalidKeyDecryptionTest) {
+TEST_F(EnDecryptTest, DistinctSecretKeysAreGenerated) {
     Context context = makeContext(preset, device_type, rank, evi::EvalMode::FLAT);
-    KeyPack pack = makeKeyPack(context);
-    KeyGenerator keygen = makeKeyGenerator(context, pack);
+    KeyGenerator keygen = makeKeyGenerator(context);
 
-    // gen seckey
     auto sec_key_a = keygen->genSecKey();
-    keygen->genPubKeys(sec_key_a);
+    auto sec_key_b = keygen->genSecKey();
 
-    Encryptor enc = makeEncryptor(context, pack);
+    Encryptor enc = makeEncryptor(context);
     Decryptor dec = makeDecryptor(context);
 
-    std::vector<float> msg(DEGREE, 0);
+    std::vector<float> msg(DEGREE, 0.0f);
     randomFaces(msg.data(), -1, 1, 1, rank);
-    auto ctxt = enc->encrypt(msg, evi::EncodeType::ITEM);
 
-    // gen another seckey
-    auto sec_key_b = keygen->genSecKey();
+    auto ctxt = enc->encrypt(msg, sec_key_a, evi::EncodeType::ITEM);
+    auto dec_a = dec->decrypt(ctxt, sec_key_a);
     auto dec_b = dec->decrypt(ctxt, sec_key_b);
 
-    // The result must exceed MAX_ERROR
+    EXPECT_LE(maxError(dec_a, msg), MAX_ERROR);
     EXPECT_GT(maxError(dec_b, msg), MAX_ERROR);
 }
 
@@ -341,4 +338,176 @@ TEST_F(EnDecryptTest, PCMMLevelOneEncDecTestUsingIP1) {
         max_error = std::max(max_error, maxError(original, decoded));
     }
     EXPECT_LE(max_error, MAX_ERROR);
+}
+
+TEST_F(EnDecryptTest, PCMMLevelOneItemEncDecTestUsingIP1) {
+    preset = evi::ParameterPreset::IP1;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::MM);
+    std::vector<Context> contexts = {context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string level1_pcmm_item_path = test_pcmm_key_path + "level1_item/";
+    fs::create_directories(level1_pcmm_item_path);
+    MultiKeyGenerator keygen(contexts, level1_pcmm_item_path, s_info);
+    keygen.generateKeys();
+
+    KeyPack pack = makeKeyPack(context, level1_pcmm_item_path + "EncKey.bin");
+    Encryptor enc = makeEncryptor(context);
+    Decryptor dec = makeDecryptor(context);
+
+    const int n = 10;
+    std::vector<std::vector<float>> items(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(items[i].data(), -1, 1, 1, rank);
+    }
+
+    auto item_queries = enc->encrypt(items, pack, evi::EncodeType::ITEM, /*level=*/1, std::nullopt);
+    ASSERT_EQ(item_queries.size(), 1);
+    EXPECT_EQ(item_queries.front().front()->getLevel(), 1);
+
+    std::stringstream item_stream;
+    evi::detail::utils::serializeQueryTo(item_queries.front(), item_stream);
+    evi::detail::Query loaded_item_queries = evi::detail::utils::deserializeQueryFrom(item_stream);
+
+    const auto dmsg = dec->decrypt(loaded_item_queries, level1_pcmm_item_path + "SecKey.bin", std::nullopt);
+
+    float max_error = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        auto original = evi::span<float>(items[i].data(), rank);
+        auto decoded = evi::span<float>(dmsg.data() + i * rank, rank);
+        max_error = std::max(max_error, maxError(original, decoded));
+    }
+    EXPECT_LE(max_error, MAX_ERROR);
+}
+
+TEST_F(EnDecryptTest, IP2_MMS_EncDecTest) {
+    preset = evi::ParameterPreset::IP2;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::MMS);
+    std::vector<Context> contexts = {context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string ip2_mms_path = test_pcmm_key_path + "ip2_mms/";
+    fs::create_directories(ip2_mms_path);
+    MultiKeyGenerator keygen(contexts, ip2_mms_path, s_info);
+    keygen.generateKeys();
+
+    KeyPack pack = makeKeyPack(context, ip2_mms_path + "EncKey.bin");
+    Encryptor enc = makeEncryptor(context);
+    Decryptor dec = makeDecryptor(context);
+
+    const int n = 4096;
+    std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(templates[i].data(), -1, 1, 1, rank);
+    }
+
+    auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
+    EXPECT_EQ(queries[0].front()->getLevel(), 1);
+
+    std::stringstream query_stream;
+    evi::detail::utils::serializeQueryTo(queries[0], query_stream);
+    evi::detail::Query loaded_queries = evi::detail::utils::deserializeQueryFrom(query_stream);
+
+    const auto dmsg = dec->decrypt(loaded_queries, ip2_mms_path + "SecKey.bin", std::nullopt);
+
+    // IP2 has lower precision (~9.9 bits vs ~15 bits for IP0)
+    float max_error = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        auto original = evi::span<float>(templates[i].data(), rank);
+        auto decoded = evi::span<float>(dmsg.data() + i * rank, rank);
+        max_error = std::max(max_error, maxError(original, decoded));
+    }
+    std::cout << "[IP2_MMS] max_error=" << max_error << std::endl;
+    EXPECT_LE(max_error, MAX_ERROR);
+}
+
+// =============================================================================
+// Regression test for bindFixedKeyToDebSwkKey UAF with IP1 (GADGET_RANK=2).
+//
+// The bug: repeated KeyPack creation triggers heap reuse that exposes dangling
+// pointers from bindFixedKeyToDebSwkKey. The first KeyPack works "by
+// coincidence" (freed memory not yet overwritten); the second KeyPack allocates
+// into the freed region and corrupts the first keypack's internal state.
+//
+// Symptom in production: search scores exceed valid cosine similarity bounds
+// (>1.0 for normalized vectors) because relin key data is garbage.
+// =============================================================================
+TEST_F(EnDecryptTest, IP1_MultipleKeyPacks_EncryptDecryptRoundTrip) {
+    preset = evi::ParameterPreset::IP1;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::SINGLE);
+
+    constexpr int NUM_KEYPACKS = 4;
+    std::vector<KeyPack> packs;
+    std::vector<KeyGenerator> keygens;
+    std::vector<evi::detail::SecretKey> sec_keys;
+    packs.reserve(NUM_KEYPACKS);
+    keygens.reserve(NUM_KEYPACKS);
+    sec_keys.reserve(NUM_KEYPACKS);
+
+    // Create multiple KeyPacks in sequence. Heap layout changes across
+    // allocations; any UAF in genRelinKey/bindFixedKeyToDebSwkKey corrupts
+    // previously-generated keys.
+    for (int i = 0; i < NUM_KEYPACKS; ++i) {
+        auto pack = makeKeyPack(context);
+        auto keygen = makeKeyGenerator(context, pack);
+        auto sec_key = keygen->genSecKey();
+        keygen->genPubKeys(sec_key);
+        packs.push_back(std::move(pack));
+        keygens.push_back(std::move(keygen));
+        sec_keys.push_back(std::move(sec_key));
+    }
+
+    // Verify ALL keypacks still decrypt correctly. If any earlier keypack's
+    // keys were corrupted by a later allocation, its decrypt will return
+    // garbage and max_error will blow up.
+    for (int i = 0; i < NUM_KEYPACKS; ++i) {
+        Encryptor enc = makeEncryptor(context, packs[i]);
+        Decryptor dec = makeDecryptor(context);
+
+        std::vector<float> msg(DEGREE, 0);
+        randomFaces(msg.data(), -1, 1, 1, rank);
+
+        auto query = enc->encrypt(msg, evi::EncodeType::ITEM);
+        auto dmsg = dec->decrypt(query, sec_keys[i]);
+
+        const float err = maxError(dmsg, msg);
+        EXPECT_LE(err, MAX_ERROR) << "KeyPack " << i << " decrypt failed (error=" << err << "). "
+                                  << "Likely UAF in bindFixedKeyToDebSwkKey corrupted earlier keys.";
+    }
+}
+
+TEST_F(EnDecryptTest, IP2_MultipleKeyPacks_EncryptDecryptRoundTrip) {
+    preset = evi::ParameterPreset::IP2;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::SINGLE);
+
+    constexpr int NUM_KEYPACKS = 4;
+    std::vector<KeyPack> packs;
+    std::vector<KeyGenerator> keygens;
+    std::vector<evi::detail::SecretKey> sec_keys;
+    packs.reserve(NUM_KEYPACKS);
+    keygens.reserve(NUM_KEYPACKS);
+    sec_keys.reserve(NUM_KEYPACKS);
+
+    for (int i = 0; i < NUM_KEYPACKS; ++i) {
+        auto pack = makeKeyPack(context);
+        auto keygen = makeKeyGenerator(context, pack);
+        auto sec_key = keygen->genSecKey();
+        keygen->genPubKeys(sec_key);
+        packs.push_back(std::move(pack));
+        keygens.push_back(std::move(keygen));
+        sec_keys.push_back(std::move(sec_key));
+    }
+
+    for (int i = 0; i < NUM_KEYPACKS; ++i) {
+        Encryptor enc = makeEncryptor(context, packs[i]);
+        Decryptor dec = makeDecryptor(context);
+
+        std::vector<float> msg(DEGREE, 0);
+        randomFaces(msg.data(), -1, 1, 1, rank);
+
+        auto query = enc->encrypt(msg, evi::EncodeType::ITEM);
+        auto dmsg = dec->decrypt(query, sec_keys[i]);
+
+        const float err = maxError(dmsg, msg);
+        EXPECT_LE(err, MAX_ERROR) << "KeyPack " << i << " decrypt failed (error=" << err << "). "
+                                  << "Likely UAF in syncVarKeyToDebSwkKey corrupted earlier keys.";
+    }
 }
