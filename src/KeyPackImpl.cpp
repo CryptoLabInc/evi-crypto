@@ -95,7 +95,13 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
     char byte = 0x03;
     out.write(&byte, sizeof(byte));
     // preset, dim, eval
-    if (context_->getEvalMode() != EvalMode::MM) {
+    if (context_->getEvalMode() == EvalMode::SINGLE) {
+        out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 0)), U64_DEGREE);
+        out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 1)), U64_DEGREE);
+        out.write(reinterpret_cast<const char *>(relin_key->getPolyData(0, 0)), U64_DEGREE);
+        out.write(reinterpret_cast<const char *>(relin_key->getPolyData(0, 1)), U64_DEGREE);
+
+    } else if (context_->getEvalMode() != EvalMode::MM) {
         out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 0)), U64_DEGREE);
         out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 1)), U64_DEGREE);
         out.write(reinterpret_cast<const char *>(relin_key->getPolyData(0, 0)), U64_DEGREE);
@@ -268,11 +274,29 @@ void KeyPackData::loadEncKeyBuffer(std::istream &is) {
 void KeyPackData::loadEvalKeyFile(const std::string &path) {
     fs::path input(path);
 
+    auto select_eval_key_file = [&](const fs::path &dir_path) {
+        fs::path expected = dir_path / ("EVIKeys" + std::to_string(context_->getPadRank()) + ".bin");
+        if (fs::exists(expected) ||
+            (context_->getEvalMode() != EvalMode::SINGLE && context_->getEvalMode() != EvalMode::MM)) {
+            return expected;
+        }
+        if (fs::exists(dir_path) && fs::is_directory(dir_path)) {
+            for (const auto &entry : fs::directory_iterator(dir_path)) {
+                fs::path candidate = entry.path();
+                if (entry.is_regular_file() && candidate.extension() == ".bin" &&
+                    candidate.filename().string().rfind("EVIKeys", 0) == 0) {
+                    return candidate;
+                }
+            }
+        }
+        return expected;
+    };
+
     auto handle_eval_bundle = [&](const fs::path &bundle_path) {
         fs::path base_dir = bundle_path.parent_path().empty() ? fs::path(".") : bundle_path.parent_path();
         fs::path dump_dir = base_dir / "dump";
         utils::deserializeEvalKey(bundle_path.string(), dump_dir.string(), false);
-        loadEvalKeyFile((dump_dir / ("EVIKeys" + std::to_string(context_->getPadRank()) + ".bin")).string());
+        loadEvalKeyFile(select_eval_key_file(dump_dir).string());
         fs::remove_all(dump_dir);
     };
 
@@ -300,7 +324,7 @@ void KeyPackData::loadEvalKeyFile(const std::string &path) {
             handle_eval_bundle(bundle);
             return;
         }
-        load_raw_file(base_dir / ("EVIKeys" + std::to_string(context_->getPadRank()) + ".bin"));
+        load_raw_file(select_eval_key_file(base_dir));
         return;
     }
 
@@ -309,7 +333,7 @@ void KeyPackData::loadEvalKeyFile(const std::string &path) {
         return;
     }
 
-    load_raw_file(input / ("EVIKeys" + std::to_string(context_->getPadRank()) + ".bin"));
+    load_raw_file(select_eval_key_file(input));
 }
 
 void KeyPackData::loadEvalKeyBuffer(std::istream &is) {
@@ -320,7 +344,14 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is) {
     // utils::syncDebSwkKeyToVarKey(context_, deb_mod_pack_key, mod_pack_key);
     // eval_loaded_ = true;
     is.read(reinterpret_cast<char *>(&eval_loaded_), sizeof(bool));
-    if (context_->getEvalMode() != EvalMode::MM) {
+
+    if (context_->getEvalMode() == EvalMode::SINGLE) {
+        is.read((char *)relin_key->getPolyData(1, 0), U64_DEGREE);
+        is.read((char *)relin_key->getPolyData(1, 1), U64_DEGREE);
+        is.read((char *)relin_key->getPolyData(0, 0), U64_DEGREE);
+        is.read((char *)relin_key->getPolyData(0, 1), U64_DEGREE);
+        utils::syncFixedKeyToDebSwkKey(context_, relin_key, deb_relin_key);
+    } else if (context_->getEvalMode() != EvalMode::MM) {
         is.read((char *)relin_key->getPolyData(1, 0), U64_DEGREE);
         is.read((char *)relin_key->getPolyData(1, 1), U64_DEGREE);
         is.read((char *)relin_key->getPolyData(0, 0), U64_DEGREE);

@@ -60,7 +60,8 @@ enum class EvalMode : uint8_t {
     MS,
     /// @endcond
     FLAT,
-    MM
+    MM,
+    SINGLE,
 };
 
 #define CHECK_SHARED_A(M) ((M) == evi::EvalMode::RMS || (M == evi::EvalMode::MS))

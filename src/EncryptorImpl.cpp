@@ -964,6 +964,9 @@ Encryptor makeEncryptor(const Context &context, const std::optional<std::vector<
     case EvalMode::FLAT:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::FLAT>>(context, seed));
+    case EvalMode::SINGLE:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::SINGLE>>(context, seed));
     case EvalMode::RMP:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::RMP>>(context, seed));
@@ -985,6 +988,9 @@ Encryptor makeEncryptor(const Context &context, const KeyPack &keypack, const st
     case EvalMode::FLAT:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::FLAT>>(context, keypack, seed));
+    case EvalMode::SINGLE:
+        return std::static_pointer_cast<EncryptorInterface>(
+            std::make_shared<EncryptorImpl<EvalMode::SINGLE>>(context, keypack, seed));
     case EvalMode::RMP:
         return std::static_pointer_cast<EncryptorInterface>(
             std::make_shared<EncryptorImpl<EvalMode::RMP>>(context, keypack, seed));

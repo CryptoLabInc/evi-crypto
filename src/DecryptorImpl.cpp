@@ -93,14 +93,19 @@ Message DecryptorFLAT::decrypt(const SearchResult ip_res, const SecretKey &key, 
             deb_dec_.decrypt(deb_ctxt, key->deb_sk_, buf, scale_factor);
         }
 
-        for (u64 j = 0; j < DEGREE; ++j) {
-            float tmp;
-            if (is_score) {
-                tmp = buf[j % context_->getItemsPerCtxt() * context_->getPadRank() + j / context_->getItemsPerCtxt()];
-            } else {
-                tmp = buf[j];
+        if (context_->getEvalMode() == EvalMode::SINGLE) {
+            res.push_back(buf[context_->getPadRank() - 1]);
+        } else {
+            for (u64 j = 0; j < DEGREE; ++j) {
+                float tmp;
+                if (is_score) {
+                    tmp =
+                        buf[j % context_->getItemsPerCtxt() * context_->getPadRank() + j / context_->getItemsPerCtxt()];
+                } else {
+                    tmp = buf[j];
+                }
+                res.push_back(tmp);
             }
-            res.push_back(tmp);
         }
     }
     return res;
@@ -324,6 +329,8 @@ Message DecryptorMM::decrypt(const Query &ctxts, const SecretKey &seckey, std::o
 
 Decryptor makeDecryptor(const Context &context) {
     if (context->getEvalMode() == EvalMode::FLAT) {
+        return Decryptor(std::make_shared<DecryptorFLAT>(context));
+    } else if (context->getEvalMode() == EvalMode::SINGLE) {
         return Decryptor(std::make_shared<DecryptorFLAT>(context));
     } else if (context->getEvalMode() == EvalMode::RMP) {
         return Decryptor(std::make_shared<DecryptorRMP>(context));

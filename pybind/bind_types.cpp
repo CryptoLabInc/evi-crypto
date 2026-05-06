@@ -56,6 +56,7 @@ void bind_types(py::module_ &m) {
         .value("RMS", EvalMode::RMS)
         .value("MS", EvalMode::MS)
         .value("FLAT", EvalMode::FLAT)
+        .value("SINGLE", EvalMode::SINGLE)
         .export_values();
 
     py::enum_<DeviceType>(m, "DeviceType")
