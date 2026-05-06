@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <random>
 #include <sstream>
@@ -282,46 +283,41 @@ TEST_F(EnDecryptTest, MultiKeyGeneratorTest) {
     EXPECT_LE(maxError(dmsg, msg), MAX_ERROR);
 }
 
-TEST_F(EnDecryptTest, PCMMEncDecTest) {
-    int n = 10000;
-    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+TEST_F(EnDecryptTest, PCMMLevelOneEncDecTestUsingIP1) {
     preset = evi::ParameterPreset::IP1;
     Context context = makeContext(preset, device_type, rank, evi::EvalMode::MM);
-
     std::vector<Context> contexts = {context};
-    MultiKeyGenerator keygen(contexts, test_pcmm_key_path, s_info);
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string level1_pcmm_path = test_pcmm_key_path + "level1/";
+    fs::create_directories(level1_pcmm_path);
+    MultiKeyGenerator keygen(contexts, level1_pcmm_path, s_info);
     keygen.generateKeys();
 
-    std::string path = test_pcmm_key_path + "EncKey.bin";
-    KeyPack pack = makeKeyPack(context, path);
-
+    KeyPack pack = makeKeyPack(context, level1_pcmm_path + "EncKey.bin");
     Encryptor enc = makeEncryptor(context);
-    std::vector<std::vector<float>> db_templates(n, std::vector<float>(rank, 0.0f));
-    for (int i = 0; i < n; i++) {
-        randomFaces(db_templates[i].data(), -1, 1, 1, rank);
-    }
-
-    auto ctxts = enc->encrypt(db_templates, pack, evi::EncodeType::ITEM, 0, std::nullopt);
-
     Decryptor dec = makeDecryptor(context);
-    // Decrypt each matrix query and stitch columns into a single message
-    Message dmsg(n * rank);
-    for (size_t m = 0; m < ctxts.size(); ++m) {
-        const auto part = dec->decrypt(ctxts[m], test_pcmm_key_path + "SecKey.bin", std::nullopt);
-        const int used_cols = std::min<int>(DEGREE, n - static_cast<int>(m) * static_cast<int>(DEGREE));
-        for (int j = 0; j < used_cols; ++j) {
-            std::memcpy(dmsg.data() + (m * DEGREE + j) * rank, part.data() + j * rank, sizeof(float) * rank);
-        }
+
+    const int n = 4096;
+    std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(templates[i].data(), -1, 1, 1, rank);
     }
 
-    float global_max_error = 0.0f;
-    for (int i = 0; i < n; i++) {
-        auto original = evi::span<float>(db_templates[i].data(), rank);
+    auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
+    EXPECT_EQ(queries[0].front()->getLevel(), 1);
+
+    // round-trip query serialization
+    std::stringstream query_stream;
+    evi::detail::utils::serializeQueryTo(queries[0], query_stream);
+    evi::detail::Query loaded_queries = evi::detail::utils::deserializeQueryFrom(query_stream);
+
+    const auto dmsg = dec->decrypt(loaded_queries, level1_pcmm_path + "SecKey.bin", std::nullopt);
+
+    float max_error = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        auto original = evi::span<float>(templates[i].data(), rank);
         auto decoded = evi::span<float>(dmsg.data() + i * rank, rank);
-        float max_error = maxError(original, decoded);
-        if (max_error > global_max_error) {
-            global_max_error = max_error;
-        }
+        max_error = std::max(max_error, maxError(original, decoded));
     }
-    EXPECT_LE(global_max_error, MAX_ERROR);
+    EXPECT_LE(max_error, MAX_ERROR);
 }

@@ -47,11 +47,11 @@ class Encryptor;
  */
 class EVI_API Encryptor {
 public:
-    /// @brief Empty handle; initialize with makeEncryptor() before use.
+    /// @brief Empty handle; initialize with `makeEncryptor()` before use.
     Encryptor() : impl_(nullptr) {}
 
     /**
-     * @brief Constructs an Encryptor with an internal implementation.
+     * @brief Constructs an `Encryptor` with an internal implementation.
      * @param impl Shared pointer to the internal `detail::Encryptor` object.
      */
     explicit Encryptor(std::shared_ptr<detail::Encryptor> impl) noexcept;

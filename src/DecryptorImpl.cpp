@@ -225,12 +225,22 @@ Message DecryptorMM::decrypt(const SearchResult ip_res, const std::string &key_p
 
 Message DecryptorMM::decrypt(const SearchResult ctxts, const evi::detail::SecretKey &seckey, bool is_score,
                              std::optional<double> scale) {
-    double delta = scale.value_or(std::pow(2.0, context_->getParam()->getScaleFactor() * 2));
 
     auto &matrix = ctxts->ip_data;
     if (!matrix->getPoly(0, 0).size()) {
         throw evi::DecryptionError("Invalid Ciphertext type is given");
     }
+
+    const int level = matrix->getLevel();
+    double delta = 0.0;
+    double scale_bits = 0.0;
+
+    if (context_->getParam()->getPreset() == evi::ParameterPreset::IP1 && level == 0) {
+        scale_bits = context_->getParam()->getScaleFactor();
+    } else {
+        scale_bits = context_->getParam()->getScaleFactor() * 2;
+    }
+    delta = scale.value_or(std::pow(2.0, scale_bits));
 
     const size_t rows = static_cast<size_t>(matrix->dim);
     size_t item_count = ctxts.getTotalItemCount() / DEGREE;
@@ -243,7 +253,6 @@ Message DecryptorMM::decrypt(const SearchResult ctxts, const evi::detail::Secret
 
     u64 *a_lvl0_base = matrix->getPolyData(1, 0);
     u64 *b_lvl0_base = matrix->getPolyData(0, 0);
-    const int level = matrix->getLevel();
     u64 *a_lvl1_base = level ? matrix->getPolyData(1, 1) : nullptr;
     u64 *b_lvl1_base = level ? matrix->getPolyData(0, 1) : nullptr;
 
@@ -285,7 +294,7 @@ Message DecryptorMM::decrypt(const Query &ctxts, const SecretKey &seckey, std::o
     const u64 cols = inner_count ? inner_count : static_cast<u64>(DEGREE);
     const u32 msg_dim = context_->getShowRank();
     Message msgs(cols * msg_dim, 0.0f);
-    double delta = scale.value_or(std::pow(2.0, context_->getParam()->getDBScaleFactor()));
+    double delta = scale.value_or(std::pow(2.0, context_->getParam()->getScaleFactor()));
 
     deb::CoeffMessage tmp_msg(DEGREE);
     const u64 stride = msg_dim;

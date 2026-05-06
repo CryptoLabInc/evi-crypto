@@ -63,20 +63,20 @@ public:
     double getScaleFactor() const;
 
     /**
-     * @brief Returns the internal padded rank used.
+     * @brief Returns the internal padded rank used for packing.
      * @return The padded rank size.
      */
-    double getPadRank() const;
+    uint32_t getPadRank() const;
 
     /**
-     * @brief Returns the show rank, user-specified input vector length, for this Context.
-     * @return The show rank size.
+     * @brief Returns the user-specified input vector length for this Context.
+     * @return The show dimension.
      */
     uint32_t getShowDim() const;
 
     /**
-     * @brief Get the evaluation mode used in this context. (e.g FLAT, RMP, MM)
-     * @return EvalMode The evaluation mode.
+     * @brief Returns the evaluation mode used in this context. (e.g FLAT, RMP, MM)
+     * @return The evaluation mode.
      */
     EvalMode getEvalMode() const;
 

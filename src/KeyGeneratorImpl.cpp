@@ -140,7 +140,6 @@ void KeyGeneratorImpl<M>::genSharedASwitchKey(const SecretKey &sec_from, const s
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genAdditiveSharedASwitchKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) {
     // S to s[0] key
-
     pack_->reverse_switch_key->setSize(sec_to.size() * DEGREE);
 
     for (int i = 0; i < sec_to.size(); i++) {
@@ -286,10 +285,25 @@ void KeyGeneratorImpl<M>::genSharedAModPackKey(const SecretKey &sec_from, const 
     }
 }
 
+template <typename T>
+inline void automorphism(const T *op, T *res, const deb::Size sig, const deb::Size degree) {
+    // X -> X^{2 * sig + 1}
+    deb::Size base = ((sig << 1) ^ 1) & (2 * degree - 1);
+    deb::Size idx = 0;
+    for (deb::Size i = 0; i < degree; i++) {
+        if (idx & degree) {
+            res[idx & (degree - 1)] = -1 * op[i];
+        } else {
+            res[idx] = op[i];
+        }
+        idx = (idx + base) & (2 * degree - 1);
+    }
+}
+
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genSwitchKey(const SecretKey &sec_from, const std::vector<SecretKey> &sec_to) {
     pack_->switch_key->setSize(sec_to.size() * DEGREE);
-    for (u64 k = 0; k < sec_to.size(); ++k) { // num key
+    for (u64 k = 0; k < sec_to.size(); ++k) {
         genSwitchingKey(sec_from, sec_to[k]->sec_key_q_, pack_->switch_key->getPolyData(1, 0) + (k << LOG_DEGREE),
                         pack_->switch_key->getPolyData(1, 1) + (k << LOG_DEGREE),
                         pack_->switch_key->getPolyData(0, 0) + (k << LOG_DEGREE),
@@ -342,9 +356,48 @@ void KeyGeneratorImpl<M>::genModPackKey(const SecretKey &sec_key) {
 template <EvalMode M>
 void KeyGeneratorImpl<M>::genPubKeys(const SecretKey &sec_key) {
     genEncKey(sec_key);
-    genModPackKey(sec_key);
-    genRelinKey(sec_key);
+    if (context_->getEvalMode() == evi::EvalMode::MM) {
+        genSwitchingKeys(sec_key);
+    } else {
+        genModPackKey(sec_key);
+        genRelinKey(sec_key);
+    }
     pack_->eval_loaded_ = true;
+}
+
+template <EvalMode M>
+void KeyGeneratorImpl<M>::genSwitchingKeys(const SecretKey &sec_key) {
+    pack_->eval_loaded_ = true;
+    pack_->key_switching_key.resize(DEGREE);
+
+    const auto deb_preset = evi::detail::utils::getDebPreset(context_);
+    const auto num_p = deb::get_num_p(deb_preset);
+    const auto gadget_rank = deb::get_gadget_rank(deb_preset);
+    const auto poly_count = num_p * gadget_rank;
+
+    deb::KeyGenerator deb_keygen(deb_preset);
+
+    for (deb::u64 sig = 0; sig < DEGREE; ++sig) {
+        deb::SwitchKey dk(deb_preset, deb::SWK_AUTO, sig);
+        auto &key = pack_->key_switching_key[sig];
+        dk.addAx(num_p, gadget_rank, true);
+        dk.addBx(num_p, gadget_rank, true);
+
+        key->setSize(DEGREE * poly_count);
+
+        auto *a_q = key->getPolyData(1, 0);
+        auto *b_q = key->getPolyData(0, 0);
+
+        for (deb::u64 i = 0; i < gadget_rank; ++i) {
+            for (deb::u64 j = 0; j < num_p; ++j) {
+                const deb::u64 idx = (i * num_p + j) * DEGREE;
+                dk.ax(i)[j].setData(a_q + idx, DEGREE);
+                dk.bx(i)[j].setData(b_q + idx, DEGREE);
+            }
+        }
+
+        deb_keygen.genAutoKeyInplace(sig, dk, sec_key->deb_sk_);
+    }
 }
 
 template <EvalMode M>
@@ -494,7 +547,6 @@ SecretKey MultiKeyGenerator::generateSecKey() {
     alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
     KeyGenerator keygen = makeKeyGenerator(evi_context_[0], evi_keypack_[0], seed);
     SecretKey sec_key = keygen->genSecKey();
-
     sec_key->s_info_.emplace(*s_info_);
     if (teew_.has_value()) {
         sec_key->teew_.emplace(teew_.value());
@@ -520,9 +572,6 @@ void MultiKeyGenerator::generatePubKey(SecretKey &sec_key) {
         alea_get_random_bytes(as_.get(), seed.data(), SEED_MIN_SIZE);
         KeyGenerator keygen = makeKeyGenerator(evi_context_[0], evi_keypack_[0], seed);
         keygen->genPubKeys(sec_key);
-    } else {
-        throw NotSupportedError("MultiKeyGenerator::generate_pub_key does not support EvalMode value: " +
-                                std::to_string(static_cast<int>(evi_context_[0]->getEvalMode())));
     }
 }
 
@@ -576,10 +625,6 @@ void MultiKeyGenerator::saveEviSecKey(SecretKey &sec_key) {
 }
 
 void MultiKeyGenerator::saveEvalKey() {
-    if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
-        return;
-    }
-
     fs::path tmp_store_path =
         store_path_ /
         (".tmp-evalkey-" + std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
@@ -603,11 +648,13 @@ void MultiKeyGenerator::saveEvalKey() {
                 (tmp_store_path.string() + "/EVIKeys" + std::to_string(inner_rank_list_[i].first) + ".bin");
             evi_keypack_[i]->saveEvalKeyFile(path);
         }
-    } else {
+    } else if (evi_context_[0]->getEvalMode() == EvalMode::FLAT) {
         for (int i = 0; i < rank_list_.size(); i++) {
             std::string path = (tmp_store_path.string() + "/EVIKeys" + std::to_string(rank_list_[i]) + ".bin");
             evi_keypack_[i]->saveEvalKeyFile(path);
         }
+    } else if (evi_context_[0]->getEvalMode() == EvalMode::MM) {
+        evi_keypack_[0]->saveEvalKeyFile(tmp_store_path.string() + "/EVIKeys" + std::to_string(rank_list_[0]) + ".bin");
     }
     utils::serializeEvalKey(tmp_store_path.string(), store_path_.string() + "/EvalKey.bin");
     fs::remove_all(tmp_store_path);

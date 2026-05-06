@@ -33,7 +33,7 @@ class MultiKeyGenerator;
 
 /**
  * @class KeyGenerator
- * @brief Generates a SecretKey, EncryptionKey, and EvaluationKey for homomorphic encryption.
+ * @brief Generates a Secret Key, Encryption Key, and Evaluation Key for homomorphic encryption.
  *
  * The `KeyGenerator` is responsible for creating a `SecretKey` and the corresponding public keys
  * such as the Encryption Key and Evaluation Key, based on the given encryption context.
@@ -46,7 +46,7 @@ public:
     KeyGenerator() = delete;
 
     /**
-     * @brief Constructs a KeyGenerator with a internal implementation.
+     * @brief Constructs a `KeyGenerator` with a internal implementation.
      * @param impl Shared pointer to the internal `detail::KeyGenerator` object.
      */
     explicit KeyGenerator(std::shared_ptr<detail::KeyGenerator> impl) noexcept;
@@ -58,10 +58,11 @@ public:
     SecretKey genSecKey();
 
     /**
-     * @brief Generates public keys (e.g., EncKey, EvalKey) and stores them in the associated KeyPack.
+     * @brief Generates public keys and returns the associated KeyPack.
      * @param sec_key Secret key used to derive public keys.
+     * @return The generated `KeyPack` object.
      */
-    void genPubKeys(SecretKey &sec_key);
+    KeyPack genPubKeys(SecretKey &sec_key);
 
 private:
     std::shared_ptr<detail::KeyGenerator> impl_;
@@ -102,7 +103,7 @@ public:
 
     /**
      * @brief Constructs a MultiKeyGenerator from multiple contexts.
-     * @param contexts List of context.
+     * @param contexts List of contexts.
      * @param dir_path Path to the directory where all key files are stored.
      * @param s_info Sealing configuration (e.g., AES-KEK).
      * @param seed Optional seed for deterministic key generation.
@@ -135,6 +136,13 @@ public:
      */
     SecretKey generateKeys(std::ostream &os);
 
+    /**
+     * @brief Generates keys and writes secret/encryption/evaluation keys to separate output streams.
+     * @param seckey Output stream receiving the secret key.
+     * @param enckey Output stream receiving the encryption key.
+     * @param evalkey Output stream receiving the evaluation key bundle.
+     * @return The generated `SecretKey` object.
+     */
     SecretKey generateKeys(std::ostream &seckey, std::ostream &enckey, std::ostream &evalkey);
 
 private:
@@ -144,7 +152,7 @@ private:
 /**
  * @brief Creates a `MultiKeyGenerator` instance for distributed secret key generation and sealing.
  *
- * @param contexts List of context.
+ * @param contexts List of contexts.
  * @param dir_path Path to the directory where all key files are stored.
  * @param s_info Sealing configuration used to protect the generated secret key.
  * @param seed Optional seed for deterministic key generation.

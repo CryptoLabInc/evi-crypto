@@ -40,6 +40,10 @@ KeyPackData::KeyPackData(const Context &context)
     mod_pack_key->setSize(context->getPadRank() * DEGREE);
     enc_loaded_ = false;
     eval_loaded_ = false;
+    keyswitcher_cpu_loaded_ = false;
+    keyswitcher_gpu_loaded_ = false;
+    keyswitcher_cpu_.reset();
+    keyswitcher_gpu_.reset();
 }
 
 KeyPackData::KeyPackData(const Context &context, std::istream &in) : KeyPackData(context) {
@@ -91,15 +95,31 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
     char byte = 0x03;
     out.write(&byte, sizeof(byte));
     // preset, dim, eval
-    out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 0)), U64_DEGREE);
-    out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 1)), U64_DEGREE);
-    out.write(reinterpret_cast<const char *>(relin_key->getPolyData(0, 0)), U64_DEGREE);
-    out.write(reinterpret_cast<const char *>(relin_key->getPolyData(0, 1)), U64_DEGREE);
-    mod_pack_key->setSize(DEGREE * context_->getPadRank());
-    out.write(reinterpret_cast<const char *>(mod_pack_key->getPolyData(1, 0)), U64_DEGREE * context_->getPadRank());
-    out.write(reinterpret_cast<const char *>(mod_pack_key->getPolyData(1, 1)), U64_DEGREE * context_->getPadRank());
-    out.write(reinterpret_cast<const char *>(mod_pack_key->getPolyData(0, 0)), U64_DEGREE * context_->getPadRank());
-    out.write(reinterpret_cast<const char *>(mod_pack_key->getPolyData(0, 1)), U64_DEGREE * context_->getPadRank());
+    if (context_->getEvalMode() != EvalMode::MM) {
+        out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 0)), U64_DEGREE);
+        out.write(reinterpret_cast<const char *>(relin_key->getPolyData(1, 1)), U64_DEGREE);
+        out.write(reinterpret_cast<const char *>(relin_key->getPolyData(0, 0)), U64_DEGREE);
+        out.write(reinterpret_cast<const char *>(relin_key->getPolyData(0, 1)), U64_DEGREE);
+        mod_pack_key->setSize(DEGREE * context_->getPadRank());
+        out.write(reinterpret_cast<const char *>(mod_pack_key->getPolyData(1, 0)), U64_DEGREE * context_->getPadRank());
+        out.write(reinterpret_cast<const char *>(mod_pack_key->getPolyData(1, 1)), U64_DEGREE * context_->getPadRank());
+        out.write(reinterpret_cast<const char *>(mod_pack_key->getPolyData(0, 0)), U64_DEGREE * context_->getPadRank());
+        out.write(reinterpret_cast<const char *>(mod_pack_key->getPolyData(0, 1)), U64_DEGREE * context_->getPadRank());
+    } else {
+        const auto deb_preset = utils::getDebPreset(context_);
+        const auto num_p = deb::get_num_p(deb_preset);
+        const auto gadget_rank = deb::get_gadget_rank(deb_preset);
+        const auto poly_count = num_p * gadget_rank;
+
+        for (int i = 0; i < key_switching_key.size(); i++) {
+            auto &key = key_switching_key[i];
+            key->setSize(DEGREE * poly_count);
+            out.write(reinterpret_cast<const char *>(key->getPolyData(1, 0)), U64_DEGREE * poly_count);
+            out.write(reinterpret_cast<const char *>(key->getPolyData(1, 1)), U64_DEGREE * poly_count);
+            out.write(reinterpret_cast<const char *>(key->getPolyData(0, 0)), U64_DEGREE * poly_count);
+            out.write(reinterpret_cast<const char *>(key->getPolyData(0, 1)), U64_DEGREE * poly_count);
+        }
+    }
 }
 
 void KeyPackData::getModPackKeyBuffer(std::ostream &out) const {
@@ -259,7 +279,7 @@ void KeyPackData::loadEvalKeyFile(const std::string &path) {
     auto load_raw_file = [&](const fs::path &file_path) {
         std::ifstream in(file_path, std::ios::in | std::ios_base::binary);
         if (!in.is_open()) {
-            throw evi::FileNotFoundError("Failed to load evaluation key");
+            throw evi::FileNotFoundError("Failed to load evaluation key" + file_path.string());
         }
 
         int header = in.peek();
@@ -300,16 +320,33 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is) {
     // utils::syncDebSwkKeyToVarKey(context_, deb_mod_pack_key, mod_pack_key);
     // eval_loaded_ = true;
     is.read(reinterpret_cast<char *>(&eval_loaded_), sizeof(bool));
-    is.read((char *)relin_key->getPolyData(1, 0), U64_DEGREE);
-    is.read((char *)relin_key->getPolyData(1, 1), U64_DEGREE);
-    is.read((char *)relin_key->getPolyData(0, 0), U64_DEGREE);
-    is.read((char *)relin_key->getPolyData(0, 1), U64_DEGREE);
-    is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(1, 0)), U64_DEGREE * context_->getPadRank());
-    is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(1, 1)), U64_DEGREE * context_->getPadRank());
-    is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(0, 0)), U64_DEGREE * context_->getPadRank());
-    is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(0, 1)), U64_DEGREE * context_->getPadRank());
-    utils::syncFixedKeyToDebSwkKey(context_, relin_key, deb_relin_key);
-    utils::syncVarKeyToDebSwkKey(context_, mod_pack_key, deb_mod_pack_key);
+    if (context_->getEvalMode() != EvalMode::MM) {
+        is.read((char *)relin_key->getPolyData(1, 0), U64_DEGREE);
+        is.read((char *)relin_key->getPolyData(1, 1), U64_DEGREE);
+        is.read((char *)relin_key->getPolyData(0, 0), U64_DEGREE);
+        is.read((char *)relin_key->getPolyData(0, 1), U64_DEGREE);
+        is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(1, 0)), U64_DEGREE * context_->getPadRank());
+        is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(1, 1)), U64_DEGREE * context_->getPadRank());
+        is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(0, 0)), U64_DEGREE * context_->getPadRank());
+        is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(0, 1)), U64_DEGREE * context_->getPadRank());
+        utils::syncFixedKeyToDebSwkKey(context_, relin_key, deb_relin_key);
+        utils::syncVarKeyToDebSwkKey(context_, mod_pack_key, deb_mod_pack_key);
+    } else {
+        const auto deb_preset = utils::getDebPreset(context_);
+        const auto num_p = deb::get_num_p(deb_preset);
+        const auto gadget_rank = deb::get_gadget_rank(deb_preset);
+        const auto poly_count = num_p * gadget_rank;
+
+        key_switching_key.resize(DEGREE);
+        for (int i = 0; i < DEGREE; i++) {
+            auto &key = key_switching_key[i];
+            key->setSize(DEGREE * poly_count);
+            is.read(reinterpret_cast<char *>(key->getPolyData(1, 0)), U64_DEGREE * poly_count);
+            is.read(reinterpret_cast<char *>(key->getPolyData(1, 1)), U64_DEGREE * poly_count);
+            is.read(reinterpret_cast<char *>(key->getPolyData(0, 0)), U64_DEGREE * poly_count);
+            is.read(reinterpret_cast<char *>(key->getPolyData(0, 1)), U64_DEGREE * poly_count);
+        }
+    }
     eval_loaded_ = true;
 }
 

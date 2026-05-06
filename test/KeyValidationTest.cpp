@@ -186,3 +186,47 @@ TEST_F(KeyValidationTest, EvalKeySaveLoad) {
         EXPECT_EQ(kp->mod_pack_key->getPolyData(0, 1)[i], kd_load->mod_pack_key->getPolyData(0, 1)[i]);
     }
 }
+
+TEST_F(KeyValidationTest, EvalKeySwitchingKeyMMSaveLoad) {
+    // Build MM-mode context and generate switching keys via MultiKeyGenerator
+    auto mm_context = makeContext(preset, evi::DeviceType::CPU, rank, evi::EvalMode::MM);
+    std::vector<Context> contexts = {mm_context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    std::vector<uint8_t> seed(evi::SEED_MIN_SIZE, 0);
+
+    MultiKeyGenerator multi_keygen(contexts, test_key_path, s_info, seed);
+    multi_keygen.generateKeys();
+
+    std::string path = test_key_path + "EvalKey.bin";
+
+    auto kp_1 = makeKeyPack(mm_context);
+    kp_1->loadEvalKeyFile(path);
+    auto kp_loaded = makeKeyPack(mm_context);
+    kp_loaded->loadEvalKeyFile(path);
+
+    auto *kp = dynamic_cast<KeyPackData *>(kp_1.get());
+    auto *kp_loaded_data = dynamic_cast<KeyPackData *>(kp_loaded.get());
+    ASSERT_NE(kp, nullptr);
+    ASSERT_NE(kp_loaded_data, nullptr);
+
+    ASSERT_EQ(kp->key_switching_key.size(), kp_loaded_data->key_switching_key.size());
+
+    for (size_t k = 0; k < kp->key_switching_key.size(); ++k) {
+        auto *a_q = kp->key_switching_key[k]->getPolyData(1, 0);
+        auto *a_p = kp->key_switching_key[k]->getPolyData(1, 1);
+        auto *b_q = kp->key_switching_key[k]->getPolyData(0, 0);
+        auto *b_p = kp->key_switching_key[k]->getPolyData(0, 1);
+
+        auto *a_q_ld = kp_loaded_data->key_switching_key[k]->getPolyData(1, 0);
+        auto *a_p_ld = kp_loaded_data->key_switching_key[k]->getPolyData(1, 1);
+        auto *b_q_ld = kp_loaded_data->key_switching_key[k]->getPolyData(0, 0);
+        auto *b_p_ld = kp_loaded_data->key_switching_key[k]->getPolyData(0, 1);
+
+        for (size_t i = 0; i < DEGREE; ++i) {
+            EXPECT_EQ(a_q[i], a_q_ld[i]);
+            EXPECT_EQ(a_p[i], a_p_ld[i]);
+            EXPECT_EQ(b_q[i], b_q_ld[i]);
+            EXPECT_EQ(b_p[i], b_p_ld[i]);
+        }
+    }
+}

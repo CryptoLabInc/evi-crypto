@@ -265,11 +265,14 @@ public:
         return preset;
     }
 
-    static constexpr u64 PRIME_Q = 1152921504606830593; // bit
+    static constexpr u64 PRIME_Q = 17179754497;
     static constexpr u64 PSI_Q = 0;
 
-    static constexpr u64 PRIME_P = 1032193; // 20bit
+    static constexpr u64 PRIME_P = 17179672577;
     static constexpr u64 PSI_P = 0;
+
+    static constexpr u64 PRIME_R = 274877562881;
+    static constexpr u64 PSI_R = 0;
 
     static constexpr u64 TWO_PRIME_Q = PRIME_Q << 1;
     static constexpr u64 TWO_PRIME_P = PRIME_P << 1;
@@ -290,8 +293,8 @@ public:
 
     static constexpr u32 HAMMING_WEIGHT = 2730;
     static constexpr double SCALE_FACTOR = 34.0;
-    static constexpr double DB_SCALE_FACTOR = 34.0;
-    static constexpr double QUERY_SCALE_FACTOR = 24.0;
+    static constexpr double DB_SCALE_FACTOR = 51.0;
+    static constexpr double QUERY_SCALE_FACTOR = 17.0;
 
     static constexpr ParameterPreset preset = ParameterPreset::IP1;
 };

@@ -73,13 +73,24 @@ fi
 
 extra_args_before=()
 extra_args=()
-if command -v clang++ >/dev/null 2>&1; then
-  resource_dir=$(clang++ -print-resource-dir 2>/dev/null || true)
-elif command -v clang >/dev/null 2>&1; then
-  resource_dir=$(clang -print-resource-dir 2>/dev/null || true)
-else
-  resource_dir=""
-fi
+resource_dir=""
+# Try to find a clang resource directory.  Prefer the version matching
+# clang-tidy, then fall back to any available clang/clang++ (highest
+# version first) to avoid intrinsic header mismatches.
+ct_version_major=$(clang-tidy --version 2>/dev/null | grep -oP 'version \K\d+' | head -1)
+candidates=("clang++-${ct_version_major}" "clang-${ct_version_major}" clang++ clang)
+# Also try common system-installed versions (descending)
+for v in 19 18 17 16 15 14 13; do
+  [[ "${v}" == "${ct_version_major}" ]] && continue
+  candidates+=("clang++-${v}" "clang-${v}")
+done
+for try_clang in "${candidates[@]}"; do
+  if command -v "${try_clang}" >/dev/null 2>&1; then
+    resource_dir=$("${try_clang}" -print-resource-dir 2>/dev/null || true)
+    [[ -n "${resource_dir}" && -d "${resource_dir}/include" ]] && break
+    resource_dir=""
+  fi
+done
 if [[ -n "${resource_dir}" && -d "${resource_dir}/include" ]]; then
   extra_args_before+=("--extra-arg-before=-isystem${resource_dir}/include")
 fi

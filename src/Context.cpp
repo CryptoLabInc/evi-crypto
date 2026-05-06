@@ -38,7 +38,7 @@ double Context::getScaleFactor() const {
     return impl_->getScaleFactor();
 }
 
-double Context::getPadRank() const {
+uint32_t Context::getPadRank() const {
     return impl_->getPadRank();
 }
 

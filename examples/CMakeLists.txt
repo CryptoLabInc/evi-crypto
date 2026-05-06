@@ -26,9 +26,18 @@ function(evi_add_example target)
 endfunction()
 
 if(BUILD_WITH_VALGRIND)
-  add_executable(sampler-constant-time sampler-constant-time.cpp)
-  target_link_libraries(sampler-constant-time PRIVATE ${PROJECT_LIB_NAME})
-  target_compile_options(sampler-constant-time PRIVATE -O0 -g -Wall)
+  include(CheckIncludeFileCXX)
+  check_include_file_cxx("valgrind/memcheck.h" EVI_HAVE_VALGRIND_MEMCHECK_H)
+  if(EVI_HAVE_VALGRIND_MEMCHECK_H)
+    add_executable(sampler-constant-time sampler-constant-time.cpp)
+    target_link_libraries(sampler-constant-time PRIVATE ${PROJECT_LIB_NAME})
+    target_compile_options(sampler-constant-time PRIVATE -O0 -g -Wall)
+  else()
+    message(
+      WARNING
+        "BUILD_WITH_VALGRIND is ON, but valgrind/memcheck.h was not found; skipping sampler-constant-time"
+    )
+  endif()
 endif()
 
 evi_add_example(keygen keygen.cpp)

@@ -43,11 +43,11 @@ class Decryptor;
  */
 class EVI_API Decryptor {
 public:
-    /// @brief Empty handle; initialize with makeDecryptor() before use.
+    /// @brief Empty handle; initialize with `makeDecryptor()` before use.
     Decryptor() : impl_(nullptr) {}
 
     /**
-     * @brief Constructs a Decryptor with an internal implementation.
+     * @brief Constructs a `Decryptor` with an internal implementation.
      * @param impl Shared pointer to the internal `detail::Decryptor` object.
      */
     explicit Decryptor(std::shared_ptr<detail::Decryptor> impl) noexcept;
