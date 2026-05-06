@@ -32,6 +32,26 @@ inline bool isU32Preset(ParameterPreset preset) {
     return preset == ParameterPreset::IP2;
 }
 
+struct EncodedMagnitude {
+    bool is_positive;
+    u128 magnitude;
+};
+
+inline EncodedMagnitude encodeScaledMagnitude(double value) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    // Keep the MSVC path aligned with EncryptorImpl's existing encoding logic.
+    const auto rounded = static_cast<i64>(value + (value > 0 ? 0.5 : -0.5));
+    const bool is_positive = rounded >= 0;
+    const u64 magnitude = is_positive ? static_cast<u64>(rounded) : static_cast<u64>(-(rounded + 1)) + 1;
+    return {is_positive, u128(magnitude)};
+#else
+    i128 temp = static_cast<i128>(value + (value > 0 ? 0.5 : -0.5));
+    const bool is_positive = temp >= 0;
+    temp = absI128(temp);
+    return {is_positive, static_cast<u128>(temp)};
+#endif
+}
+
 // =========================================================================
 // Coefficient type conversion
 // =========================================================================
@@ -86,19 +106,17 @@ inline void encodeCoeffs(const float *msg, CoeffT *out_q, CoeffT *out_p, u64 cou
     const u64 mod_p = param.getPrimeP();
 
     for (u64 i = 0; i < count; ++i) {
-        i128 temp = static_cast<i128>(msg[i] * scale + signBiasDoubleFromFloat(msg[i]));
-        i64 is_positive = temp >= 0;
-        temp = absI128(temp);
+        const auto encoded = encodeScaledMagnitude(msg[i] * scale);
 
         u64 value_q = reduceBarrett(mod_q, param.getTwoPrimeQ(), param.getTwoTo64Q(), param.getTwoTo64ShoupQ(),
-                                    param.getBarrRatioQ(), static_cast<u128>(temp));
-        u64 final_q = selectIfCondU64(is_positive, value_q, mod_q - value_q);
+                                    param.getBarrRatioQ(), encoded.magnitude);
+        u64 final_q = selectIfCondU64(encoded.is_positive, value_q, mod_q - value_q);
         out_q[i] = static_cast<CoeffT>(final_q);
 
         if (out_p) {
             u64 value_p = reduceBarrett(mod_p, param.getTwoPrimeP(), param.getTwoTo64P(), param.getTwoTo64ShoupP(),
-                                        param.getBarrRatioP(), static_cast<u128>(temp));
-            u64 final_p = selectIfCondU64(is_positive, value_p, mod_p - value_p);
+                                        param.getBarrRatioP(), encoded.magnitude);
+            u64 final_p = selectIfCondU64(encoded.is_positive, value_p, mod_p - value_p);
             out_p[i] = static_cast<CoeffT>(final_p);
         }
     }

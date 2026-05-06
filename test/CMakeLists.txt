@@ -25,7 +25,7 @@ cpmaddpackage(
   GITHUB_REPOSITORY
   google/googletest
   GIT_TAG
-  release-1.11.0
+  v1.14.0
   OPTIONS
   "INSTALL_GTEST OFF"
   "BUILD_GMOCK OFF")
