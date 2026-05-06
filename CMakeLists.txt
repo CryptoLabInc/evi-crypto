@@ -212,6 +212,11 @@ else()
 endif()
 set_property(TARGET ${PROJECT_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
 
+# Static builds: EVI_API becomes empty (no dllexport/dllimport).
+if(BUILD_AS_STATIC)
+  target_compile_definitions(${PROJECT_LIB_NAME} PUBLIC EVI_STATIC)
+endif()
+
 # On Windows, define EVI_BUILDING_LIB so that EVI_API resolves to
 # __declspec(dllexport) when compiling library sources (see Export.hpp).
 if(WIN32 AND NOT BUILD_AS_STATIC)

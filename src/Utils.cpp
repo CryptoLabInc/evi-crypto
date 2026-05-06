@@ -219,7 +219,7 @@ std::vector<uint8_t> utils::decodeBase64(const std::string &encoded) {
 std::string utils::timePointToIso8601UtcString(std::chrono::system_clock::time_point tp) {
     const std::time_t raw = std::chrono::system_clock::to_time_t(tp);
     std::tm tm{};
-#ifdef _MSC_VER
+#ifdef _WIN32
     gmtime_s(&tm, &raw);
 #else
     gmtime_r(&raw, &tm);
@@ -236,7 +236,7 @@ std::chrono::system_clock::time_point utils::iso8601UtcStringToTimePoint(const s
     if (iss.fail() || iss.peek() != std::char_traits<char>::eof()) {
         throw evi::InvalidInputError("Invalid timestamp format: '" + ts + "'");
     }
-#ifdef _MSC_VER
+#ifdef _WIN32
     const std::time_t raw = _mkgmtime(&tm);
 #else
     const std::time_t raw = timegm(&tm);

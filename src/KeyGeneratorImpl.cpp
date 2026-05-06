@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <random>
 
 // deb header
@@ -589,7 +590,15 @@ void KeyGeneratorImpl<M>::genPubKeys(const SecretKey &sec_key) {
 
                 // Use deb/alea CSPRNG for all random sampling
                 auto bwd_rng = deb::createRandomGenerator(deb::SeedGenerator::Gen());
-                const __uint128_t qp = static_cast<__uint128_t>(q_val) * p_val;
+                auto sample_uniform_mod = [&](u64 mod) -> u64 {
+                    const u64 max = std::numeric_limits<u64>::max();
+                    const u64 threshold = max - (max % mod);
+                    u64 val = 0;
+                    do {
+                        bwd_rng->getRandomUint64Array(&val, 1);
+                    } while (val >= threshold);
+                    return val % mod;
+                };
 
                 for (int j = 0; j < K_NUM_SHARED_SECRET; ++j) {
                     auto &bk = pack_->shared_a_bwd_l0_keys[j];
@@ -600,18 +609,9 @@ void KeyGeneratorImpl<M>::genPubKeys(const SecretKey &sec_key) {
 
                     // CRT-consistent random ax: uniform over [0, Q*P) via rejection sampling
                     {
-                        const __uint128_t max128 = ~static_cast<__uint128_t>(0);
-                        const __uint128_t threshold = max128 - (max128 % qp);
-                        std::vector<u64> pair(2);
                         for (u64 k = 0; k < DEGREE; ++k) {
-                            __uint128_t val;
-                            do {
-                                bwd_rng->getRandomUint64Array(pair.data(), 2);
-                                val = (static_cast<__uint128_t>(pair[1]) << 64) | pair[0];
-                            } while (val >= threshold);
-                            val %= qp;
-                            bk.ax_q[k] = static_cast<u64>(val % q_val);
-                            bk.ax_p[k] = static_cast<u64>(val % p_val);
+                            bk.ax_q[k] = sample_uniform_mod(q_val);
+                            bk.ax_p[k] = sample_uniform_mod(p_val);
                         }
                     }
                     bwd_aq.forwardNTT(bk.ax_q.data());
