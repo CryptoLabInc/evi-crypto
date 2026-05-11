@@ -1255,8 +1255,12 @@ static bool decodeEnvelopeKeyDataToStreamSeekable(std::istream &stream, std::ost
         throw evi::InvalidInputError("Failed to parse key envelope from " + std::string(err.what()));
     }
 
-    const EnvelopeDecodeInfo info = validateEnvelopeMetadataForDecode(envelope, expected_usage);
     if (key_id != nullptr) {
+        *key_id = requireNonEmptyStringField(envelope, "kid", "Key envelope");
+    }
+
+    const EnvelopeDecodeInfo info = validateEnvelopeMetadataForDecode(envelope, expected_usage);
+    if (key_id != nullptr && *key_id != info.kid) {
         *key_id = info.kid;
     }
 
