@@ -651,15 +651,13 @@ void IKeyManagerImpl::wrapEncKey(const std::string &key_id, const std::string &k
 }
 
 void IKeyManagerImpl::wrapEncKey(const std::string &key_id, std::istream &key_stream, std::ostream &out_stream) {
-    withAuditedFailure(auditor(), "key.wrap", "key.wrap.fail", "wrap", key_id, evi::KeyType::EncKey.name, "WRAP_FAILED",
-                       [&] {
-                           if (key_id.empty()) {
-                               throw InvalidInputError("key_id must not be empty");
-                           }
-                           nlohmann::ordered_json json_envelope = provider_->encapEncKey(key_id, key_stream);
-                           const std::string envelope_text = json_envelope.dump();
-                           out_stream << envelope_text;
-                       });
+    withAuditedFailure(
+        auditor(), "key.wrap", "key.wrap.fail", "wrap", key_id, evi::KeyType::EncKey.name, "WRAP_FAILED", [&] {
+            if (key_id.empty()) {
+                throw InvalidInputError("key_id must not be empty");
+            }
+            evi::detail::provider_common::writeEncKeyEnvelopeJsonFromStream(key_id, key_stream, out_stream);
+        });
 }
 
 void IKeyManagerImpl::wrapEncKey(const std::string &key_id, const IKeyPack &keypack, std::ostream &out_stream) {
@@ -675,13 +673,20 @@ void IKeyManagerImpl::wrapEncKey(const std::string &key_id, const IKeyPack &keyp
 
 void IKeyManagerImpl::unwrapEncKey(std::istream &in_stream, std::ostream &out_stream) {
     const std::string key_type = evi::KeyType::EncKey.name;
-    std::string envelope_text = evi::detail::common::readStreamToString(in_stream, "key envelope");
-    SensitiveDataGuard envelope_guard(envelope_text);
-    const std::string key_id = extractKeyIdFromEnvelopeText(envelope_text);
-    withAuditedFailure(auditor(), "key.unwrap", "key.unwrap.fail", "unwrap", key_id, key_type, "UNWRAP_FAILED", [&] {
-        std::istringstream envelope_stream(envelope_text, std::ios::binary);
-        provider_->decapEncKey(envelope_stream, out_stream);
-    });
+    std::string key_id;
+    try {
+        evi::detail::provider_common::decodeEnvelopeKeyDataToStream(in_stream, out_stream, "vector_search", &key_id);
+        auditor().emitSuccess("key.unwrap", "unwrap", key_id, key_type);
+        return;
+    } catch (const std::exception &e) {
+        if (!key_id.empty()) {
+            const AuditFailure failure = toAuditFailure(e, "UNWRAP_FAILED");
+            const std::string event_type =
+                (failure.code == "AAD_VERIFICATION_FAILED") ? "key.aad.fail" : "key.unwrap.fail";
+            auditor().emitFailure(event_type, "unwrap", key_id, key_type, failure.code, failure.message);
+        }
+        throw;
+    }
 }
 
 void IKeyManagerImpl::unwrapEncKey(const std::string &file_path, const std::string &out_path) {
@@ -718,15 +723,13 @@ void IKeyManagerImpl::wrapEvalKey(const std::string &key_id, const std::string &
 }
 
 void IKeyManagerImpl::wrapEvalKey(const std::string &key_id, std::istream &key_stream, std::ostream &out_stream) {
-    withAuditedFailure(auditor(), "key.wrap", "key.wrap.fail", "wrap", key_id, evi::KeyType::EvalKey.name,
-                       "WRAP_FAILED", [&] {
-                           if (key_id.empty()) {
-                               throw InvalidInputError("key_id must not be empty");
-                           }
-                           nlohmann::ordered_json json_envelope = provider_->encapEvalKey(key_id, key_stream);
-                           const std::string envelope_text = json_envelope.dump();
-                           out_stream << envelope_text;
-                       });
+    withAuditedFailure(
+        auditor(), "key.wrap", "key.wrap.fail", "wrap", key_id, evi::KeyType::EvalKey.name, "WRAP_FAILED", [&] {
+            if (key_id.empty()) {
+                throw InvalidInputError("key_id must not be empty");
+            }
+            evi::detail::provider_common::writeEvalKeyEnvelopeJsonFromStream(key_id, key_stream, out_stream);
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -741,13 +744,20 @@ void IKeyManagerImpl::unwrapEvalKey(const std::string &file_path, const std::str
 
 void IKeyManagerImpl::unwrapEvalKey(std::istream &in_stream, std::ostream &out_stream) {
     const std::string key_type = evi::KeyType::EvalKey.name;
-    std::string envelope_text = evi::detail::common::readStreamToString(in_stream, "key envelope");
-    SensitiveDataGuard envelope_guard(envelope_text);
-    const std::string key_id = extractKeyIdFromEnvelopeText(envelope_text);
-    withAuditedFailure(auditor(), "key.unwrap", "key.unwrap.fail", "unwrap", key_id, key_type, "UNWRAP_FAILED", [&] {
-        std::istringstream envelope_stream(envelope_text, std::ios::binary);
-        provider_->decapEvalKey(envelope_stream, out_stream);
-    });
+    std::string key_id;
+    try {
+        evi::detail::provider_common::decodeEnvelopeKeyDataToStream(in_stream, out_stream, "vector_search", &key_id);
+        auditor().emitSuccess("key.unwrap", "unwrap", key_id, key_type);
+        return;
+    } catch (const std::exception &e) {
+        if (!key_id.empty()) {
+            const AuditFailure failure = toAuditFailure(e, "UNWRAP_FAILED");
+            const std::string event_type =
+                (failure.code == "AAD_VERIFICATION_FAILED") ? "key.aad.fail" : "key.unwrap.fail";
+            auditor().emitFailure(event_type, "unwrap", key_id, key_type, failure.code, failure.message);
+        }
+        throw;
+    }
 }
 
 // ---------------------------------------------------------------------------

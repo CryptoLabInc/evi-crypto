@@ -27,7 +27,11 @@
 namespace evi {
 namespace detail {
 
-/// Returns true if the preset uses 32-bit NTT primes (u32 coefficients).
+/// Returns true if the preset's primes fit in u32 storage (i.e., log2(prime) <= 32).
+/// IP2 uses 32-bit primes; IP3 uses 30-bit primes — both fit u32 coefficient storage.
+/// NOTE: this is a storage-width predicate, NOT a guarantee that the u32 NTT
+/// (Barrett 4*p < 2^32) path is supported. The Barrett path additionally requires
+/// p < 2^30, which IP2 does not satisfy.
 inline bool isU32Preset(ParameterPreset preset) {
     return preset == ParameterPreset::IP2;
 }

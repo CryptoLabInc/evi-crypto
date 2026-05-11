@@ -456,6 +456,8 @@ ParameterPreset utils::stringToPreset(const std::string &str) {
         return ParameterPreset::IP1;
     } else if (str == "IP2") {
         return ParameterPreset::IP2;
+    } else if (str == "IP3") {
+        return ParameterPreset::IP3;
     } else if (str == "QF0") {
         return ParameterPreset::QF0;
     } else if (str == "QF1") {
@@ -475,6 +477,9 @@ std::string utils::assignParameterString(evi::ParameterPreset preset) {
     }
     case evi::ParameterPreset::IP2: {
         return "IP2";
+    }
+    case evi::ParameterPreset::IP3: {
+        return "IP3";
     }
     case evi::ParameterPreset::QF1: {
         return "QF1";

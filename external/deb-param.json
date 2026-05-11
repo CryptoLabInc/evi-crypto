@@ -59,6 +59,24 @@
     ]
   },
   {
+    "NAME": "EVI_IP3",
+    "PARENT": "EVI_IP0",
+    "NUM_QP": 1,
+    "NUM_TP": 1,
+    "ENC_LEVEL": 1,
+    "GADGET_RANK": 2,
+    "PRIMES": [
+      1073692673,
+      1073668097,
+      70368743669761
+    ],
+    "SCALE_FACTORS": [
+      30.0,
+      30.0,
+      46.0
+    ]
+  },
+  {
     "NAME": "EVI_QF",
     "PARENT": "EVI_IP0",
     "PRIMES": [

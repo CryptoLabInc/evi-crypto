@@ -33,6 +33,8 @@ deb::Preset getDebPreset(const detail::Context &context) {
         return deb::PRESET_EVI_IP1;
     case ParameterPreset::IP2:
         return deb::PRESET_EVI_IP2;
+    case ParameterPreset::IP3:
+        return deb::PRESET_EVI_IP3;
     case evi::ParameterPreset::QF0:
     case evi::ParameterPreset::QF1:
         return deb::PRESET_EVI_QF;
@@ -48,6 +50,8 @@ deb::Preset getDebPreset(const std::string &preset) {
         return deb::PRESET_EVI_IP1;
     } else if (preset == "IP2") {
         return deb::PRESET_EVI_IP2;
+    } else if (preset == "IP3") {
+        return deb::PRESET_EVI_IP3;
     } else if (preset == "QF0" || preset == "QF1") {
         return deb::PRESET_EVI_QF;
     } else {
@@ -181,6 +185,8 @@ deb::Preset getDebPreset(evi::ParameterPreset preset) {
         return deb::PRESET_EVI_IP1;
     case ParameterPreset::IP2:
         return deb::PRESET_EVI_IP2;
+    case ParameterPreset::IP3:
+        return deb::PRESET_EVI_IP3;
     case ParameterPreset::QF0:
     case ParameterPreset::QF1:
         return deb::PRESET_EVI_QF;

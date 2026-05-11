@@ -372,6 +372,8 @@ Parameter setPreset(evi::ParameterPreset name) {
         return std::make_shared<IP1Base>();
     } else if (name == evi::ParameterPreset::IP2) {
         return std::make_shared<IP2Base>();
+    } else if (name == evi::ParameterPreset::IP3) {
+        return std::make_shared<IP3Base>();
     } else {
         throw evi::NotSupportedError("Not supported preset type!");
         return nullptr;

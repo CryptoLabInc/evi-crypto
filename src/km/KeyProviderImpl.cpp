@@ -31,7 +31,8 @@ nlohmann::ordered_json KeyProvider::encapSecKey(const std::string &key_id, std::
     std::vector<uint8_t> key_blob = evi::detail::provider_common::readBinaryStream(key_stream);
     evi::security::SensitiveDataGuard guard(key_blob);
     const auto &entry_type = s_info.s_mode == SealMode::AES_KEK ? evi::KeyType::SecKeySealed : evi::KeyType::SecKey;
-    evi::ProviderEntry entry = evi::detail::provider_common::makeEncapEntry(entry_type.name, entry_type.role, key_blob);
+    evi::ProviderEntry entry =
+        evi::detail::provider_common::makeProviderEntryFromPayload(entry_type.name, entry_type.role, key_blob);
     evi::ProviderEnvelope envelope;
     envelope.entries.push_back(std::move(entry));
     return evi::detail::provider_common::makeSealedEnvelopeJson(envelope, key_id, "vector_search",
@@ -40,7 +41,8 @@ nlohmann::ordered_json KeyProvider::encapSecKey(const std::string &key_id, std::
 nlohmann::ordered_json KeyProvider::encapEncKey(const std::string &key_id, std::istream &key_stream) {
     std::vector<uint8_t> key_blob = evi::detail::provider_common::readBinaryStream(key_stream);
     const auto &entry_type = evi::KeyType::EncKey;
-    evi::ProviderEntry entry = evi::detail::provider_common::makeEncapEntry(entry_type.name, entry_type.role, key_blob);
+    evi::ProviderEntry entry =
+        evi::detail::provider_common::makeProviderEntryFromPayload(entry_type.name, entry_type.role, key_blob);
     evi::ProviderEnvelope envelope;
     envelope.entries.push_back(std::move(entry));
     return evi::detail::provider_common::makeSealedEnvelopeJson(envelope, key_id, "vector_search",
@@ -49,7 +51,8 @@ nlohmann::ordered_json KeyProvider::encapEncKey(const std::string &key_id, std::
 nlohmann::ordered_json KeyProvider::encapEvalKey(const std::string &key_id, std::istream &key_stream) {
     std::vector<uint8_t> key_blob = evi::detail::provider_common::readBinaryStream(key_stream);
     const auto &entry_type = evi::KeyType::EvalKey;
-    evi::ProviderEntry entry = evi::detail::provider_common::makeEncapEntry(entry_type.name, entry_type.role, key_blob);
+    evi::ProviderEntry entry =
+        evi::detail::provider_common::makeProviderEntryFromPayload(entry_type.name, entry_type.role, key_blob);
     evi::ProviderEnvelope envelope;
     envelope.entries.push_back(std::move(entry));
     return evi::detail::provider_common::makeSealedEnvelopeJson(envelope, key_id, "vector_search",
@@ -99,7 +102,8 @@ nlohmann::ordered_json KeyProvider::encapMetadataKey(const std::string &key_id, 
     }
 
     const auto &entry_type = evi::KeyType::MetadataKey;
-    evi::ProviderEntry entry = evi::detail::provider_common::makeEncapEntry(entry_type.name, entry_type.role, key_blob);
+    evi::ProviderEntry entry =
+        evi::detail::provider_common::makeProviderEntryFromPayload(entry_type.name, entry_type.role, key_blob);
     if (mode == SealMode::AES_KEK && iv.has_value() && tag.has_value()) {
         entry.alg = "AES-256-GCM";
         entry.iv = evi::detail::utils::encodeToBase64(*iv);
@@ -152,19 +156,16 @@ void KeyProvider::decapSecKey(std::istream &key_stream, std::ostream &out_stream
         throw evi::NotSupportedError("SealMode::" + evi::detail::utils::assignSealModeString(mode) +
                                      " is not yet supported for secret key unwrap");
     }
-    std::vector<uint8_t> decoded_key = evi::detail::provider_common::decodeEnvelopeKeyData(key_stream, "vector_search");
+    std::vector<uint8_t> decoded_key =
+        evi::detail::provider_common::decodeEnvelopeKeyDataToVector(key_stream, "vector_search");
     evi::security::SensitiveDataGuard guard(decoded_key);
     evi::detail::provider_common::writeBinaryStream(out_stream, decoded_key);
 }
 void KeyProvider::decapEncKey(std::istream &key_stream, std::ostream &out_stream) {
-    std::vector<uint8_t> decoded_key = evi::detail::provider_common::decodeEnvelopeKeyData(key_stream, "vector_search");
-    evi::security::SensitiveDataGuard guard(decoded_key);
-    evi::detail::provider_common::writeBinaryStream(out_stream, decoded_key);
+    evi::detail::provider_common::decodeEnvelopeKeyDataToStream(key_stream, out_stream, "vector_search");
 }
 void KeyProvider::decapEvalKey(std::istream &key_stream, std::ostream &out_stream) {
-    std::vector<uint8_t> decoded_key = evi::detail::provider_common::decodeEnvelopeKeyData(key_stream, "vector_search");
-    evi::security::SensitiveDataGuard guard(decoded_key);
-    evi::detail::provider_common::writeBinaryStream(out_stream, decoded_key);
+    evi::detail::provider_common::decodeEnvelopeKeyDataToStream(key_stream, out_stream, "vector_search");
 }
 void KeyProvider::decapMetadataKey(std::istream &key_stream, std::ostream &out_stream) {
     decapMetadataKey(key_stream, out_stream, SealInfo(SealMode::NONE));
@@ -177,7 +178,8 @@ void KeyProvider::decapMetadataKey(std::istream &key_stream, std::ostream &out_s
                                      " is not yet supported for metadata key unwrap");
     }
 
-    std::vector<uint8_t> decoded_key = evi::detail::provider_common::decodeEnvelopeKeyData(key_stream, "vector_search");
+    std::vector<uint8_t> decoded_key =
+        evi::detail::provider_common::decodeEnvelopeKeyDataToVector(key_stream, "vector_search");
     evi::security::SensitiveDataGuard guard(decoded_key);
     if (mode == SealMode::AES_KEK) {
         if (s_info.kek.size() != evi::AES256_KEY_SIZE) {
