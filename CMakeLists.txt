@@ -55,22 +55,6 @@ set(EVI_KM_AWS_SDK_GIT_TAG
     "1.11.720"
     CACHE STRING "aws-sdk-cpp git tag used when EVI_KM_PREFER_AWS_SDK=ON")
 
-set(OPENSSL_USE_STATIC_LIBS TRUE)
-if(NOT OPENSSL_CRYPTO_LIBRARY)
-  find_library(
-    OPENSSL_CRYPTO_LIBRARY
-    NAMES libcrypto.a crypto
-    HINTS ${CMAKE_PREFIX_PATH}/lib $ENV{CONDA_PREFIX}/lib
-    NO_DEFAULT_PATH)
-endif()
-if(BUILD_KEY_MANAGEMENT AND NOT OPENSSL_SSL_LIBRARY)
-  find_library(
-    OPENSSL_SSL_LIBRARY
-    NAMES libssl.a ssl
-    HINTS ${CMAKE_PREFIX_PATH}/lib $ENV{CONDA_PREFIX}/lib
-    NO_DEFAULT_PATH)
-endif()
-
 if(BUILD_C_API)
   message(
     WARNING "BUILD_C_API=ON: AWS/GCP KeyManager SDK backends are disabled.")
@@ -213,6 +197,10 @@ else()
 endif()
 set_property(TARGET ${PROJECT_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
 
+if(BUILD_AS_STATIC)
+  target_compile_definitions(${PROJECT_LIB_NAME} PUBLIC EVI_STATIC)
+endif()
+
 # On Windows, define EVI_BUILDING_LIB so that EVI_API resolves to
 # __declspec(dllexport) when compiling library sources (see Export.hpp).
 if(WIN32 AND NOT BUILD_AS_STATIC)
@@ -236,48 +224,43 @@ set(_EVI_OPENSSL_COMPONENTS Crypto)
 if(BUILD_KEY_MANAGEMENT)
   list(APPEND _EVI_OPENSSL_COMPONENTS SSL)
 endif()
+if(WIN32)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
 find_package(OpenSSL REQUIRED COMPONENTS ${_EVI_OPENSSL_COMPONENTS})
-if(NOT OPENSSL_CRYPTO_LIBRARY OR NOT OPENSSL_CRYPTO_LIBRARY MATCHES
-                                 "\\.(a|lib)$")
-  message(
-    FATAL_ERROR
-      "Static libcrypto.a required; got '${OPENSSL_CRYPTO_LIBRARY}'. Set OPENSSL_ROOT_DIR to a static OpenSSL build."
-  )
+if(WIN32)
+  if(NOT OPENSSL_CRYPTO_LIBRARY OR NOT OPENSSL_CRYPTO_LIBRARY MATCHES
+                                   "\\.(a|lib)$")
+    message(
+      FATAL_ERROR
+        "Windows builds require static OpenSSL crypto library; got '${OPENSSL_CRYPTO_LIBRARY}'. Set OPENSSL_ROOT_DIR to an OpenSSL installation with static libraries."
+    )
+  endif()
+  if(BUILD_KEY_MANAGEMENT
+     AND (NOT OPENSSL_SSL_LIBRARY OR NOT OPENSSL_SSL_LIBRARY MATCHES
+                                     "\\.(a|lib)$"))
+    message(
+      FATAL_ERROR
+        "Windows builds with BUILD_KEY_MANAGEMENT=ON require static OpenSSL ssl library; got '${OPENSSL_SSL_LIBRARY}'. Set OPENSSL_ROOT_DIR to an OpenSSL installation with static libraries."
+    )
+  endif()
+
+  if(MSVC)
+    set(_EVI_OPENSSL_INCLUDE_DIRS ${OPENSSL_INCLUDE_DIRS}
+                                  ${OPENSSL_INCLUDE_DIR})
+    find_path(
+      _EVI_OPENSSL_CONFIG_INCLUDE_DIR
+      NAMES openssl/opensslconf.h
+      HINTS ${_EVI_OPENSSL_INCLUDE_DIRS})
+    if(_EVI_OPENSSL_CONFIG_INCLUDE_DIR)
+      list(APPEND _EVI_OPENSSL_INCLUDE_DIRS ${_EVI_OPENSSL_CONFIG_INCLUDE_DIR})
+    endif()
+    list(REMOVE_DUPLICATES _EVI_OPENSSL_INCLUDE_DIRS)
+    target_include_directories(${PROJECT_LIB_NAME} SYSTEM
+                               PUBLIC ${_EVI_OPENSSL_INCLUDE_DIRS})
+  endif()
 endif()
 message(STATUS "OpenSSL crypto library: ${OPENSSL_CRYPTO_LIBRARY}")
-if(BUILD_KEY_MANAGEMENT AND (NOT OPENSSL_SSL_LIBRARY OR NOT OPENSSL_SSL_LIBRARY
-                                                        MATCHES "\\.(a|lib)$"))
-  message(
-    FATAL_ERROR
-      "BUILD_KEY_MANAGEMENT=ON requires static libssl.a; got '${OPENSSL_SSL_LIBRARY}'. Set OPENSSL_ROOT_DIR to a static OpenSSL build."
-  )
-endif()
-set(_EVI_OPENSSL_INCLUDE_DIRS ${OPENSSL_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIR})
-find_path(
-  _EVI_OPENSSL_CONFIG_INCLUDE_DIR
-  NAMES openssl/opensslconf.h
-  HINTS ${_EVI_OPENSSL_INCLUDE_DIRS} /usr/include/${CMAKE_LIBRARY_ARCHITECTURE}
-        $ENV{CONDA_PREFIX}/include)
-if(_EVI_OPENSSL_CONFIG_INCLUDE_DIR)
-  list(APPEND _EVI_OPENSSL_INCLUDE_DIRS ${_EVI_OPENSSL_CONFIG_INCLUDE_DIR})
-endif()
-list(REMOVE_DUPLICATES _EVI_OPENSSL_INCLUDE_DIRS)
-if(MSVC)
-  target_include_directories(${PROJECT_LIB_NAME} SYSTEM
-                             PUBLIC ${_EVI_OPENSSL_INCLUDE_DIRS})
-else()
-  foreach(_dir IN LISTS _EVI_OPENSSL_INCLUDE_DIRS)
-    if(_dir STREQUAL "/usr/include")
-      target_compile_options(
-        ${PROJECT_LIB_NAME}
-        PUBLIC "$<$<COMPILE_LANGUAGE:C,CXX>:-idirafter${_dir}>")
-    else()
-      target_compile_options(
-        ${PROJECT_LIB_NAME}
-        PUBLIC "$<$<COMPILE_LANGUAGE:C,CXX>:-isystem${_dir}>")
-    endif()
-  endforeach()
-endif()
 
 list(APPEND EXTERNAL_LIBS deb alea flatbuffers OpenSSL::Crypto)
 if(BUILD_KEY_MANAGEMENT)
