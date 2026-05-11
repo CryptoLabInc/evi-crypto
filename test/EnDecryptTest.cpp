@@ -435,10 +435,10 @@ TEST_F(EnDecryptTest, IP3_MM_EncDecTest) {
 
     const int n = 4096;
     // Fixed seed for reproducibility on CI failure ('IP3M').
-    constexpr unsigned kSeed = 0x4950334du;
+    constexpr unsigned K_SEED = 0x4950334du;
     std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
     for (int i = 0; i < n; ++i) {
-        randomFaces(templates[i].data(), -1, 1, 1, rank, kSeed + i);
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
     }
 
     auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
@@ -477,10 +477,10 @@ TEST_F(EnDecryptTest, IP3_MMS_EncDecTest) {
 
     const int n = 4096;
     // Fixed seed for reproducibility on CI failure ('IP3S').
-    constexpr unsigned kSeed = 0x49503353u;
+    constexpr unsigned K_SEED = 0x49503353u;
     std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
     for (int i = 0; i < n; ++i) {
-        randomFaces(templates[i].data(), -1, 1, 1, rank, kSeed + i);
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
     }
 
     auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
@@ -519,10 +519,10 @@ TEST_F(EnDecryptTest, IP3_MM32_EncDecTest) {
 
     const int n = 4096;
     // Fixed seed for reproducibility on CI failure ('IP32').
-    constexpr unsigned kSeed = 0x49503332u;
+    constexpr unsigned K_SEED = 0x49503332u;
     std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
     for (int i = 0; i < n; ++i) {
-        randomFaces(templates[i].data(), -1, 1, 1, rank, kSeed + i);
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
     }
 
     auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
@@ -561,10 +561,10 @@ TEST_F(EnDecryptTest, IP3_MMS32_EncDecTest) {
 
     const int n = 4096;
     // Fixed seed for reproducibility on CI failure ('IP35').
-    constexpr unsigned kSeed = 0x49503533u;
+    constexpr unsigned K_SEED = 0x49503533u;
     std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
     for (int i = 0; i < n; ++i) {
-        randomFaces(templates[i].data(), -1, 1, 1, rank, kSeed + i);
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
     }
 
     auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
