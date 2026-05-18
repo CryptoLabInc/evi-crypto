@@ -79,6 +79,26 @@ TEST(SyncKeyUAF, IP2_GenPubKeys_SingleKeyPack) {
     EXPECT_EQ(pack_data->deb_relin_key.bxSize(), gadget_rank * num_secret);
 }
 
+TEST(SyncKeyUAF, IP3_GenPubKeys_SingleKeyPack) {
+    auto preset = evi::ParameterPreset::IP3;
+    evi::detail::setPreset(preset);
+
+    Context context = makeContext(preset, evi::DeviceType::CPU, 128, evi::EvalMode::SINGLE);
+    KeyPack pack = makeKeyPack(context);
+    KeyGenerator keygen = makeKeyGenerator(context, pack);
+
+    auto sk = keygen->genSecKey();
+    keygen->genPubKeys(sk);
+
+    auto *pack_data = dynamic_cast<KeyPackData *>(pack.get());
+    ASSERT_NE(pack_data, nullptr);
+    const auto deb_preset = evi::detail::utils::getDebPreset(context);
+    const auto gadget_rank = deb::get_gadget_rank(deb_preset);
+    const auto num_secret = deb::get_num_secret(deb_preset);
+    EXPECT_EQ(pack_data->deb_relin_key.axSize(), gadget_rank);
+    EXPECT_EQ(pack_data->deb_relin_key.bxSize(), gadget_rank * num_secret);
+}
+
 TEST(SyncKeyUAF, IP1_GenPubKeys_TwoKeyPacks_Crash) {
     // Two KeyPacks: the second allocation exposes the dangling pointer
     // from the first genPubKeys, causing glibc to detect heap corruption.

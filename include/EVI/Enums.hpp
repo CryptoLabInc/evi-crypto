@@ -39,6 +39,7 @@ enum class ParameterPreset {
     IP0,
     IP1,
     IP2,
+    IP3,
 };
 
 /**

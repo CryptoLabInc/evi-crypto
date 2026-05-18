@@ -326,6 +326,23 @@ TEST_F(KeyManagementTest, WrapAndUnwrapEncKeyRoundTripsBytes) {
     EXPECT_EQ(decoded, bytes);
 }
 
+TEST_F(KeyManagementTest, UnwrapEncKeyDoesNotWriteOutputWhenIntegrityCheckFails) {
+    const fs::path key_path = writeBinary("EncKey.bin", enc_payload_);
+    const fs::path sealed_path = temp_dir_ / "EncKeyTamperedHash.json";
+
+    manager_.wrapEncKey("enc-key-id", key_path.string(), sealed_path.string());
+
+    json envelope = loadEnvelope(sealed_path);
+    envelope["entries"][0]["hash"]["value"] = "tampered-hash";
+
+    std::istringstream envelope_stream(envelope.dump());
+    std::ostringstream out_stream(std::ios::binary);
+    out_stream << "existing-output";
+
+    EXPECT_THROW(manager_.unwrapEncKey(envelope_stream, out_stream), evi::InvalidInputError);
+    EXPECT_EQ(out_stream.str(), "existing-output");
+}
+
 TEST_F(KeyManagementTest, WrapAndUnwrapEvalKeyRoundTripsBytes) {
     const std::vector<uint8_t> bytes = eval_payload_;
     const fs::path key_path = writeBinary("EvalKey.bin", bytes);

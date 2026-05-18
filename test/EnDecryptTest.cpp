@@ -419,6 +419,174 @@ TEST_F(EnDecryptTest, IP2_MMS_EncDecTest) {
     EXPECT_LE(max_error, MAX_ERROR);
 }
 
+TEST_F(EnDecryptTest, IP3_MM_EncDecTest) {
+    preset = evi::ParameterPreset::IP3;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::MM);
+    std::vector<Context> contexts = {context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string ip3_mm_path = test_pcmm_key_path + "ip3_mm/";
+    fs::create_directories(ip3_mm_path);
+    MultiKeyGenerator keygen(contexts, ip3_mm_path, s_info);
+    keygen.generateKeys();
+
+    KeyPack pack = makeKeyPack(context, ip3_mm_path + "EncKey.bin");
+    Encryptor enc = makeEncryptor(context);
+    Decryptor dec = makeDecryptor(context);
+
+    const int n = 4096;
+    // Fixed seed for reproducibility on CI failure ('IP3M').
+    constexpr unsigned K_SEED = 0x4950334du;
+    std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
+    }
+
+    auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
+    EXPECT_EQ(queries[0].front()->getLevel(), 1);
+
+    std::stringstream query_stream;
+    evi::detail::utils::serializeQueryTo(queries[0], query_stream);
+    evi::detail::Query loaded_queries = evi::detail::utils::deserializeQueryFrom(query_stream);
+
+    const auto dmsg = dec->decrypt(loaded_queries, ip3_mm_path + "SecKey.bin", std::nullopt);
+
+    // IP3 (30-bit Q/P) has ~10.5-bit precision; well within MAX_ERROR (1/64).
+    float max_error = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        auto original = evi::span<float>(templates[i].data(), rank);
+        auto decoded = evi::span<float>(dmsg.data() + i * rank, rank);
+        max_error = std::max(max_error, maxError(original, decoded));
+    }
+    std::cout << "[IP3_MM] max_error=" << max_error << std::endl;
+    EXPECT_LE(max_error, MAX_ERROR);
+}
+
+TEST_F(EnDecryptTest, IP3_MMS_EncDecTest) {
+    preset = evi::ParameterPreset::IP3;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::MMS);
+    std::vector<Context> contexts = {context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string ip3_mms_path = test_pcmm_key_path + "ip3_mms/";
+    fs::create_directories(ip3_mms_path);
+    MultiKeyGenerator keygen(contexts, ip3_mms_path, s_info);
+    keygen.generateKeys();
+
+    KeyPack pack = makeKeyPack(context, ip3_mms_path + "EncKey.bin");
+    Encryptor enc = makeEncryptor(context);
+    Decryptor dec = makeDecryptor(context);
+
+    const int n = 4096;
+    // Fixed seed for reproducibility on CI failure ('IP3S').
+    constexpr unsigned K_SEED = 0x49503353u;
+    std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
+    }
+
+    auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
+    EXPECT_EQ(queries[0].front()->getLevel(), 1);
+
+    std::stringstream query_stream;
+    evi::detail::utils::serializeQueryTo(queries[0], query_stream);
+    evi::detail::Query loaded_queries = evi::detail::utils::deserializeQueryFrom(query_stream);
+
+    const auto dmsg = dec->decrypt(loaded_queries, ip3_mms_path + "SecKey.bin", std::nullopt);
+
+    // IP3 (30-bit Q/P) has ~10.5-bit precision; well within MAX_ERROR (1/64).
+    float max_error = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        auto original = evi::span<float>(templates[i].data(), rank);
+        auto decoded = evi::span<float>(dmsg.data() + i * rank, rank);
+        max_error = std::max(max_error, maxError(original, decoded));
+    }
+    std::cout << "[IP3_MMS] max_error=" << max_error << std::endl;
+    EXPECT_LE(max_error, MAX_ERROR);
+}
+
+TEST_F(EnDecryptTest, IP3_MM32_EncDecTest) {
+    preset = evi::ParameterPreset::IP3;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::MM32);
+    std::vector<Context> contexts = {context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string ip3_mm32_path = test_pcmm_key_path + "ip3_mm32/";
+    fs::create_directories(ip3_mm32_path);
+    MultiKeyGenerator keygen(contexts, ip3_mm32_path, s_info);
+    keygen.generateKeys();
+
+    KeyPack pack = makeKeyPack(context, ip3_mm32_path + "EncKey.bin");
+    Encryptor enc = makeEncryptor(context);
+    Decryptor dec = makeDecryptor(context);
+
+    const int n = 4096;
+    // Fixed seed for reproducibility on CI failure ('IP32').
+    constexpr unsigned K_SEED = 0x49503332u;
+    std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
+    }
+
+    auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
+    EXPECT_EQ(queries[0].front()->getLevel(), 1);
+
+    std::stringstream query_stream;
+    evi::detail::utils::serializeQueryTo(queries[0], query_stream);
+    evi::detail::Query loaded_queries = evi::detail::utils::deserializeQueryFrom(query_stream);
+
+    const auto dmsg = dec->decrypt(loaded_queries, ip3_mm32_path + "SecKey.bin", std::nullopt);
+
+    // IP3 MM32 (u32 storage path) — same precision as IP3 MM.
+    float max_error = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        auto original = evi::span<float>(templates[i].data(), rank);
+        auto decoded = evi::span<float>(dmsg.data() + i * rank, rank);
+        max_error = std::max(max_error, maxError(original, decoded));
+    }
+    std::cout << "[IP3_MM32] max_error=" << max_error << std::endl;
+    EXPECT_LE(max_error, MAX_ERROR);
+}
+
+TEST_F(EnDecryptTest, IP3_MMS32_EncDecTest) {
+    preset = evi::ParameterPreset::IP3;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::MMS32);
+    std::vector<Context> contexts = {context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string ip3_mms32_path = test_pcmm_key_path + "ip3_mms32/";
+    fs::create_directories(ip3_mms32_path);
+    MultiKeyGenerator keygen(contexts, ip3_mms32_path, s_info);
+    keygen.generateKeys();
+
+    KeyPack pack = makeKeyPack(context, ip3_mms32_path + "EncKey.bin");
+    Encryptor enc = makeEncryptor(context);
+    Decryptor dec = makeDecryptor(context);
+
+    const int n = 4096;
+    // Fixed seed for reproducibility on CI failure ('IP35').
+    constexpr unsigned K_SEED = 0x49503533u;
+    std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
+    }
+
+    auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
+    EXPECT_EQ(queries[0].front()->getLevel(), 1);
+
+    std::stringstream query_stream;
+    evi::detail::utils::serializeQueryTo(queries[0], query_stream);
+    evi::detail::Query loaded_queries = evi::detail::utils::deserializeQueryFrom(query_stream);
+
+    const auto dmsg = dec->decrypt(loaded_queries, ip3_mms32_path + "SecKey.bin", std::nullopt);
+
+    // IP3 MMS32 (u32 + shared-A; production hot path) — measured ~5.8e-4 max error.
+    float max_error = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        auto original = evi::span<float>(templates[i].data(), rank);
+        auto decoded = evi::span<float>(dmsg.data() + i * rank, rank);
+        max_error = std::max(max_error, maxError(original, decoded));
+    }
+    std::cout << "[IP3_MMS32] max_error=" << max_error << std::endl;
+    EXPECT_LE(max_error, MAX_ERROR);
+}
+
 // =============================================================================
 // Regression test for bindFixedKeyToDebSwkKey UAF with IP1 (GADGET_RANK=2).
 //
@@ -476,6 +644,44 @@ TEST_F(EnDecryptTest, IP1_MultipleKeyPacks_EncryptDecryptRoundTrip) {
 
 TEST_F(EnDecryptTest, IP2_MultipleKeyPacks_EncryptDecryptRoundTrip) {
     preset = evi::ParameterPreset::IP2;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::SINGLE);
+
+    constexpr int NUM_KEYPACKS = 4;
+    std::vector<KeyPack> packs;
+    std::vector<KeyGenerator> keygens;
+    std::vector<evi::detail::SecretKey> sec_keys;
+    packs.reserve(NUM_KEYPACKS);
+    keygens.reserve(NUM_KEYPACKS);
+    sec_keys.reserve(NUM_KEYPACKS);
+
+    for (int i = 0; i < NUM_KEYPACKS; ++i) {
+        auto pack = makeKeyPack(context);
+        auto keygen = makeKeyGenerator(context, pack);
+        auto sec_key = keygen->genSecKey();
+        keygen->genPubKeys(sec_key);
+        packs.push_back(std::move(pack));
+        keygens.push_back(std::move(keygen));
+        sec_keys.push_back(std::move(sec_key));
+    }
+
+    for (int i = 0; i < NUM_KEYPACKS; ++i) {
+        Encryptor enc = makeEncryptor(context, packs[i]);
+        Decryptor dec = makeDecryptor(context);
+
+        std::vector<float> msg(DEGREE, 0);
+        randomFaces(msg.data(), -1, 1, 1, rank);
+
+        auto query = enc->encrypt(msg, evi::EncodeType::ITEM);
+        auto dmsg = dec->decrypt(query, sec_keys[i]);
+
+        const float err = maxError(dmsg, msg);
+        EXPECT_LE(err, MAX_ERROR) << "KeyPack " << i << " decrypt failed (error=" << err << "). "
+                                  << "Likely UAF in syncVarKeyToDebSwkKey corrupted earlier keys.";
+    }
+}
+
+TEST_F(EnDecryptTest, IP3_MultipleKeyPacks_EncryptDecryptRoundTrip) {
+    preset = evi::ParameterPreset::IP3;
     Context context = makeContext(preset, device_type, rank, evi::EvalMode::SINGLE);
 
     constexpr int NUM_KEYPACKS = 4;

@@ -275,7 +275,9 @@ Message DecryptorMM::decrypt(const SearchResult ctxts, const evi::detail::Secret
         const double db_scale = context_->getParam()->getDBScaleFactor();
         const double query_scale = context_->getParam()->getQueryScaleFactor();
         scale_bits = db_scale + std::log2(q_target / (q_ctx * p_ctx)) + query_scale;
-    } else if ((ctx_preset == evi::ParameterPreset::IP1 || ctx_preset == evi::ParameterPreset::IP2) && level == 0) {
+    } else if ((ctx_preset == evi::ParameterPreset::IP1 || ctx_preset == evi::ParameterPreset::IP2 ||
+                ctx_preset == evi::ParameterPreset::IP3) &&
+               level == 0) {
         scale_bits = context_->getParam()->getScaleFactor();
     } else {
         scale_bits = context_->getParam()->getScaleFactor() * 2;

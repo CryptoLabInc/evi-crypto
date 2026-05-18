@@ -44,10 +44,11 @@ protected:
         rank = 1 << (rand() % 5 + 6);
         std::cout << "RANK : " << rank << std::endl;
 
-        // IP1/IP2 + RMP eval-key save/load is currently unstable; exclude them here.
+        // IP1/IP2/IP3 + RMP eval-key save/load is currently unstable; exclude them here.
         do {
             preset = get_random_preset();
-        } while (preset == evi::ParameterPreset::IP1 || preset == evi::ParameterPreset::IP2);
+        } while (preset == evi::ParameterPreset::IP1 || preset == evi::ParameterPreset::IP2 ||
+                 preset == evi::ParameterPreset::IP3);
         auto evi_preset = setPreset(preset);
         std::cout << "Testing parameter : " << getParamToString(preset) << "(" << static_cast<int>(preset) << ")"
                   << std::endl;
@@ -454,6 +455,86 @@ TEST_F(KeyValidationTest, EvalKeySharedAIP2SaveLoad) {
             EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].bx_q[k], ip2_q) << "bx_q exceeds IP2 Q at j=" << j << " k=" << k;
             EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].ax_p[k], ip2_p) << "ax_p exceeds IP2 P at j=" << j << " k=" << k;
             EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].bx_p[k], ip2_p) << "bx_p exceeds IP2 P at j=" << j << " k=" << k;
+
+            // Serialization roundtrip
+            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_q[k], kd->shared_a_bwd_l0_keys[j].ax_q[k])
+                << "ax_q mismatch at j=" << j << " k=" << k;
+            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_p[k], kd->shared_a_bwd_l0_keys[j].ax_p[k])
+                << "ax_p mismatch at j=" << j << " k=" << k;
+            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].bx_q[k], kd->shared_a_bwd_l0_keys[j].bx_q[k])
+                << "bx_q mismatch at j=" << j << " k=" << k;
+            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].bx_p[k], kd->shared_a_bwd_l0_keys[j].bx_p[k])
+                << "bx_p mismatch at j=" << j << " k=" << k;
+        }
+    }
+}
+
+TEST_F(KeyValidationTest, EvalKeySharedAIP3SaveLoad) {
+    // IP3 MMS: verify shared-A keys with 30-bit primes roundtrip
+    // Backward keys use IP3 primes (no base conversion to IP0)
+    auto ip3_context = makeContext(evi::ParameterPreset::IP3, evi::DeviceType::CPU, rank, evi::EvalMode::MMS);
+    std::vector<Context> contexts = {ip3_context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    std::vector<uint8_t> seed(evi::SEED_MIN_SIZE, 0);
+
+    const std::string ip3_key_path = test_key_path + "ip3_mms/";
+    std::filesystem::create_directories(ip3_key_path);
+
+    MultiKeyGenerator multi_keygen(contexts, ip3_key_path, s_info, seed);
+    multi_keygen.generateKeys();
+
+    auto *kd_mem = dynamic_cast<KeyPackData *>(multi_keygen.getKeyPack().get());
+    ASSERT_NE(kd_mem, nullptr);
+
+    std::string path = ip3_key_path + "EvalKey.bin";
+
+    auto kp_loaded = makeKeyPack(ip3_context);
+    kp_loaded->loadEvalKeyFile(path);
+
+    auto *kd = dynamic_cast<KeyPackData *>(kp_loaded.get());
+    ASSERT_NE(kd, nullptr);
+
+    // Check nss
+    EXPECT_EQ(kd_mem->num_shared_secret, kd->num_shared_secret);
+    EXPECT_GT(kd_mem->num_shared_secret, 0);
+    const int nss = kd_mem->num_shared_secret;
+
+    // Forward QPR keys
+    ASSERT_EQ(kd_mem->shared_a_fwd_keys.size(), static_cast<size_t>(nss));
+    ASSERT_EQ(kd->shared_a_fwd_keys.size(), static_cast<size_t>(nss));
+    for (int s = 0; s < nss; ++s) {
+        for (deb::Size d = 0; d < 2; ++d) {
+            for (deb::Size p = 0; p < 3; ++p) {
+                for (size_t k = 0; k < DEGREE; ++k) {
+                    EXPECT_EQ(kd_mem->shared_a_fwd_keys[s].ax(d)[p].data()[k],
+                              kd->shared_a_fwd_keys[s].ax(d)[p].data()[k]);
+                    EXPECT_EQ(kd_mem->shared_a_fwd_keys[s].bx(d)[p].data()[k],
+                              kd->shared_a_fwd_keys[s].bx(d)[p].data()[k]);
+                }
+            }
+        }
+    }
+
+    // Off-diagonal keys
+    ASSERT_EQ(kd_mem->shared_a_off_diag_keys.size(), static_cast<size_t>(nss * nss));
+    ASSERT_EQ(kd->shared_a_off_diag_keys.size(), static_cast<size_t>(nss * nss));
+
+    // Backward L0 keys — IP3 primes (30-bit), not IP0 primes
+    // All backward key coefficients must be < IP3 PRIME_Q / PRIME_P
+    const u64 ip3_q = ip3_context->getParam()->getPrimeQ();
+    const u64 ip3_p = ip3_context->getParam()->getPrimeP();
+    ASSERT_LE(ip3_q, UINT32_MAX) << "IP3 Q must fit in 32 bits";
+    ASSERT_LE(ip3_p, UINT32_MAX) << "IP3 P must fit in 32 bits";
+
+    ASSERT_EQ(kd_mem->shared_a_bwd_l0_keys.size(), static_cast<size_t>(nss));
+    ASSERT_EQ(kd->shared_a_bwd_l0_keys.size(), static_cast<size_t>(nss));
+    for (int j = 0; j < nss; ++j) {
+        for (size_t k = 0; k < DEGREE; ++k) {
+            // Verify coefficients are within IP3 prime range
+            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].ax_q[k], ip3_q) << "ax_q exceeds IP3 Q at j=" << j << " k=" << k;
+            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].bx_q[k], ip3_q) << "bx_q exceeds IP3 Q at j=" << j << " k=" << k;
+            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].ax_p[k], ip3_p) << "ax_p exceeds IP3 P at j=" << j << " k=" << k;
+            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].bx_p[k], ip3_p) << "bx_p exceeds IP3 P at j=" << j << " k=" << k;
 
             // Serialization roundtrip
             EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_q[k], kd->shared_a_bwd_l0_keys[j].ax_q[k])

@@ -21,7 +21,6 @@ project(
   DESCRIPTION "Encrypted Vector Index library"
   LANGUAGES CXX)
 
-# set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(PROJECT_LIB_NAME ${PROJECT_NAME})
@@ -131,12 +130,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   add_compile_definitions(BUILD_DEBUG)
 endif()
 
-set(PROJECT_DEPENDENCY "")
 set(COMPILE_OPTION "")
 
-set(CRYPT_SRCS src/crypto/fips202.cpp src/crypto/PRNG.cpp)
-
-set(EVI_CORE_SOURCES
+set(EVI_SRCS
     src/ContextImpl.cpp
     src/Context.cpp
     src/Message.cpp
@@ -152,9 +148,6 @@ set(EVI_CORE_SOURCES
     src/KeyPack.cpp
     src/Utils.cpp
     src/DebUtils.cpp)
-set(EVI_CORE_LIBS)
-
-set(EVI_SRCS ${EVI_CORE_SOURCES})
 
 add_subdirectory(external)
 
@@ -164,25 +157,17 @@ if(USE_PROFILE)
   list(APPEND COMPILE_OPTION USE_PROFILE)
 endif()
 
-# keygen
-set(KEYGEN_SRCS
-    src/KeyGeneratorImpl.cpp src/KeyGenerator.cpp src/DecryptorImpl.cpp
-    src/Decryptor.cpp src/crypto/AES.cpp src/SealInfo.cpp)
-list(APPEND KEYGEN_SRCS ${EVI_SRCS})
-
-# enc/dec
-set(ENC_DEC_SRCS
+set(PROJECT_MAIN_SRCS
+    ${EVI_SRCS}
+    src/KeyGeneratorImpl.cpp
+    src/KeyGenerator.cpp
     src/EncryptorImpl.cpp
     src/Encryptor.cpp
     src/DecryptorImpl.cpp
-    src/crypto/AES.cpp
     src/Decryptor.cpp
+    src/crypto/AES.cpp
     src/crypto/TEEWrapper.cpp
     src/SealInfo.cpp)
-list(APPEND ENC_DEC_SRCS ${EVI_SRCS})
-
-# Aggregate sources for the main library.
-set(PROJECT_MAIN_SRCS ${KEYGEN_SRCS} ${ENC_DEC_SRCS})
 
 if(BUILD_KEY_MANAGEMENT)
   list(
@@ -212,7 +197,6 @@ else()
 endif()
 set_property(TARGET ${PROJECT_LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-# Static builds: EVI_API becomes empty (no dllexport/dllimport).
 if(BUILD_AS_STATIC)
   target_compile_definitions(${PROJECT_LIB_NAME} PUBLIC EVI_STATIC)
 endif()
@@ -232,23 +216,55 @@ if(WIN32 AND BUILD_KEY_MANAGEMENT)
   target_link_libraries(${PROJECT_LIB_NAME} PRIVATE ws2_32)
 endif()
 
-#
 target_compile_definitions(${PROJECT_LIB_NAME}
                            PUBLIC alignment_byte=${ALIGNMENT_BYTE})
 
 # Core dependencies
-find_package(OpenSSL REQUIRED)
-list(
-  APPEND
-  EXTERNAL_LIBS
-  OpenSSL::SSL
-  OpenSSL::Crypto
-  deb
-  alea
-  flatbuffers)
+set(_EVI_OPENSSL_COMPONENTS Crypto)
+if(BUILD_KEY_MANAGEMENT)
+  list(APPEND _EVI_OPENSSL_COMPONENTS SSL)
+endif()
+if(WIN32)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
+find_package(OpenSSL REQUIRED COMPONENTS ${_EVI_OPENSSL_COMPONENTS})
+if(WIN32)
+  if(NOT OPENSSL_CRYPTO_LIBRARY OR NOT OPENSSL_CRYPTO_LIBRARY MATCHES
+                                   "\\.(a|lib)$")
+    message(
+      FATAL_ERROR
+        "Windows builds require static OpenSSL crypto library; got '${OPENSSL_CRYPTO_LIBRARY}'. Set OPENSSL_ROOT_DIR to an OpenSSL installation with static libraries."
+    )
+  endif()
+  if(BUILD_KEY_MANAGEMENT
+     AND (NOT OPENSSL_SSL_LIBRARY OR NOT OPENSSL_SSL_LIBRARY MATCHES
+                                     "\\.(a|lib)$"))
+    message(
+      FATAL_ERROR
+        "Windows builds with BUILD_KEY_MANAGEMENT=ON require static OpenSSL ssl library; got '${OPENSSL_SSL_LIBRARY}'. Set OPENSSL_ROOT_DIR to an OpenSSL installation with static libraries."
+    )
+  endif()
 
-if(EVI_CORE_LIBS)
-  list(APPEND EXTERNAL_LIBS ${EVI_CORE_LIBS})
+  if(MSVC)
+    set(_EVI_OPENSSL_INCLUDE_DIRS ${OPENSSL_INCLUDE_DIRS}
+                                  ${OPENSSL_INCLUDE_DIR})
+    find_path(
+      _EVI_OPENSSL_CONFIG_INCLUDE_DIR
+      NAMES openssl/opensslconf.h
+      HINTS ${_EVI_OPENSSL_INCLUDE_DIRS})
+    if(_EVI_OPENSSL_CONFIG_INCLUDE_DIR)
+      list(APPEND _EVI_OPENSSL_INCLUDE_DIRS ${_EVI_OPENSSL_CONFIG_INCLUDE_DIR})
+    endif()
+    list(REMOVE_DUPLICATES _EVI_OPENSSL_INCLUDE_DIRS)
+    target_include_directories(${PROJECT_LIB_NAME} SYSTEM
+                               PUBLIC ${_EVI_OPENSSL_INCLUDE_DIRS})
+  endif()
+endif()
+message(STATUS "OpenSSL crypto library: ${OPENSSL_CRYPTO_LIBRARY}")
+
+list(APPEND EXTERNAL_LIBS deb alea flatbuffers OpenSSL::Crypto)
+if(BUILD_KEY_MANAGEMENT)
+  list(APPEND EXTERNAL_LIBS OpenSSL::SSL)
 endif()
 
 set(_PRIVATE_EXTERNAL_LIBS)
@@ -259,8 +275,7 @@ elseif(TARGET flatbuffers)
 endif()
 
 # Link dependencies directly to the main target (PUBLIC to propagate)
-target_link_libraries(${PROJECT_LIB_NAME} PUBLIC ${EXTERNAL_LIBS}
-                                                 ${PROJECT_DEPENDENCY})
+target_link_libraries(${PROJECT_LIB_NAME} PUBLIC ${EXTERNAL_LIBS})
 if(_PRIVATE_EXTERNAL_LIBS)
   target_link_libraries(${PROJECT_LIB_NAME} PRIVATE ${_PRIVATE_EXTERNAL_LIBS})
 endif()
@@ -389,11 +404,6 @@ if(EVI_ENABLE_INSTALL)
   include(GNUInstallDirs)
 
   set(EVI_INSTALL_TARGETS ${PROJECT_LIB_NAME})
-
-  # install( TARGETS ${EVI_INSTALL_TARGETS} EXPORT ${PROJECT_LIB_NAME}Targets
-  # LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} RUNTIME DESTINATION
-  # ${CMAKE_INSTALL_BINDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} INCLUDES
-  # DESTINATION include PUBLIC_HEADER DESTINATION include)
 
   install(
     EXPORT ${PROJECT_LIB_NAME}Targets

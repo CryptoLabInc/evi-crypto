@@ -44,6 +44,7 @@ void bind_types(py::module_ &m) {
         .value("IP0", ParameterPreset::IP0)
         .value("IP1", ParameterPreset::IP1)
         .value("IP2", ParameterPreset::IP2)
+        .value("IP3", ParameterPreset::IP3)
         .export_values();
 
     py::enum_<evi::SealMode>(m, "SealMode")
