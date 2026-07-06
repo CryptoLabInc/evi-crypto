@@ -24,6 +24,8 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <type_traits>
+#include <variant>
 
 #if defined(__linux__) || defined(__APPLE__)
 #endif
@@ -56,7 +58,7 @@ protected:
         mode = evi::EvalMode::RMP;
         context = makeContext(preset, evi::DeviceType::CPU, rank, mode);
 
-        db_scale = static_cast<double>(evi_preset->getPrimeP());
+        db_scale = static_cast<double>(deb_prime_at(evi_preset.get(), 1));
         query_scale = std::pow(2.0, 2 * evi_preset->getScaleFactor());
 
         keypack = makeKeyPack(context);
@@ -303,22 +305,23 @@ TEST_F(KeyValidationTest, EvalKeySwitchingKeyMMSaveLoad) {
     ASSERT_EQ(kp->key_switching_key.size(), kp_loaded_data->key_switching_key.size());
 
     for (size_t k = 0; k < kp->key_switching_key.size(); ++k) {
-        auto *a_q = kp->key_switching_key[k]->getPolyData(1, 0);
-        auto *a_p = kp->key_switching_key[k]->getPolyData(1, 1);
-        auto *b_q = kp->key_switching_key[k]->getPolyData(0, 0);
-        auto *b_p = kp->key_switching_key[k]->getPolyData(0, 1);
-
-        auto *a_q_ld = kp_loaded_data->key_switching_key[k]->getPolyData(1, 0);
-        auto *a_p_ld = kp_loaded_data->key_switching_key[k]->getPolyData(1, 1);
-        auto *b_q_ld = kp_loaded_data->key_switching_key[k]->getPolyData(0, 0);
-        auto *b_p_ld = kp_loaded_data->key_switching_key[k]->getPolyData(0, 1);
-
-        for (size_t i = 0; i < DEGREE; ++i) {
-            EXPECT_EQ(a_q[i], a_q_ld[i]);
-            EXPECT_EQ(a_p[i], a_p_ld[i]);
-            EXPECT_EQ(b_q[i], b_q_ld[i]);
-            EXPECT_EQ(b_p[i], b_p_ld[i]);
-        }
+        ASSERT_EQ(kp->key_switching_key[k].index(), kp_loaded_data->key_switching_key[k].index());
+        std::visit(
+            [&](const auto &key, const auto &loaded_key) {
+                using Key = std::decay_t<decltype(key)>;
+                using LoadedKey = std::decay_t<decltype(loaded_key)>;
+                if constexpr (std::is_same_v<Key, LoadedKey>) {
+                    auto *a_q = key->getPolyData(1, 0);
+                    auto *b_q = key->getPolyData(0, 0);
+                    auto *a_q_ld = loaded_key->getPolyData(1, 0);
+                    auto *b_q_ld = loaded_key->getPolyData(0, 0);
+                    for (size_t i = 0; i < DEGREE; ++i) {
+                        EXPECT_EQ(a_q[i], a_q_ld[i]);
+                        EXPECT_EQ(b_q[i], b_q_ld[i]);
+                    }
+                }
+            },
+            kp->key_switching_key[k], kp_loaded_data->key_switching_key[k]);
     }
 }
 
@@ -377,13 +380,21 @@ TEST_F(KeyValidationTest, EvalKeySharedAMMSSaveLoad) {
     ASSERT_EQ(kd->shared_a_bwd_l0_keys.size(), static_cast<size_t>(nss));
     for (int j = 0; j < nss; ++j) {
         for (size_t k = 0; k < DEGREE; ++k) {
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_q[k], kd->shared_a_bwd_l0_keys[j].ax_q[k])
+            // MMS backward keys use the u64 (polyvec) variant alternative:
+            // the producer gates u32 on preset==IP3 only, so non-IP3
+            // (incl. MMS/IP0) -> poly<u64>. Route through poly<u64> like SearchTest.cpp.
+            using BL0 = KeyPackData::BackwardL0Key;
+            EXPECT_EQ(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].ax_q)[k],
+                      BL0::poly<u64>(kd->shared_a_bwd_l0_keys[j].ax_q)[k])
                 << "ax_q mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_p[k], kd->shared_a_bwd_l0_keys[j].ax_p[k])
+            EXPECT_EQ(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].ax_p)[k],
+                      BL0::poly<u64>(kd->shared_a_bwd_l0_keys[j].ax_p)[k])
                 << "ax_p mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].bx_q[k], kd->shared_a_bwd_l0_keys[j].bx_q[k])
+            EXPECT_EQ(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].bx_q)[k],
+                      BL0::poly<u64>(kd->shared_a_bwd_l0_keys[j].bx_q)[k])
                 << "bx_q mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].bx_p[k], kd->shared_a_bwd_l0_keys[j].bx_p[k])
+            EXPECT_EQ(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].bx_p)[k],
+                      BL0::poly<u64>(kd->shared_a_bwd_l0_keys[j].bx_p)[k])
                 << "bx_p mismatch at j=" << j << " k=" << k;
         }
     }
@@ -441,8 +452,8 @@ TEST_F(KeyValidationTest, EvalKeySharedAIP2SaveLoad) {
 
     // Backward L0 keys — IP2 primes (32-bit), not IP0 primes
     // All backward key coefficients must be < IP2 PRIME_Q / PRIME_P
-    const u64 ip2_q = ip2_context->getParam()->getPrimeQ();
-    const u64 ip2_p = ip2_context->getParam()->getPrimeP();
+    const u64 ip2_q = ip2_context->getParam()->getQ(0);
+    const u64 ip2_p = deb_prime_at(ip2_context->getParam(), 1);
     ASSERT_LE(ip2_q, UINT32_MAX) << "IP2 Q must fit in 32 bits";
     ASSERT_LE(ip2_p, UINT32_MAX) << "IP2 P must fit in 32 bits";
 
@@ -450,20 +461,32 @@ TEST_F(KeyValidationTest, EvalKeySharedAIP2SaveLoad) {
     ASSERT_EQ(kd->shared_a_bwd_l0_keys.size(), static_cast<size_t>(nss));
     for (int j = 0; j < nss; ++j) {
         for (size_t k = 0; k < DEGREE; ++k) {
+            // IP2 is demoted to the u64 (polyvec) variant: the producer
+            // gates u32-native on preset==IP3 only; IP2's backward primes
+            // fit in 32 bits but IP2 is u64-numeric post-demotion -> poly<u64>.
+            using BL0 = KeyPackData::BackwardL0Key;
             // Verify coefficients are within IP2 prime range
-            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].ax_q[k], ip2_q) << "ax_q exceeds IP2 Q at j=" << j << " k=" << k;
-            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].bx_q[k], ip2_q) << "bx_q exceeds IP2 Q at j=" << j << " k=" << k;
-            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].ax_p[k], ip2_p) << "ax_p exceeds IP2 P at j=" << j << " k=" << k;
-            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].bx_p[k], ip2_p) << "bx_p exceeds IP2 P at j=" << j << " k=" << k;
+            EXPECT_LT(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].ax_q)[k], ip2_q)
+                << "ax_q exceeds IP2 Q at j=" << j << " k=" << k;
+            EXPECT_LT(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].bx_q)[k], ip2_q)
+                << "bx_q exceeds IP2 Q at j=" << j << " k=" << k;
+            EXPECT_LT(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].ax_p)[k], ip2_p)
+                << "ax_p exceeds IP2 P at j=" << j << " k=" << k;
+            EXPECT_LT(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].bx_p)[k], ip2_p)
+                << "bx_p exceeds IP2 P at j=" << j << " k=" << k;
 
             // Serialization roundtrip
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_q[k], kd->shared_a_bwd_l0_keys[j].ax_q[k])
+            EXPECT_EQ(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].ax_q)[k],
+                      BL0::poly<u64>(kd->shared_a_bwd_l0_keys[j].ax_q)[k])
                 << "ax_q mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_p[k], kd->shared_a_bwd_l0_keys[j].ax_p[k])
+            EXPECT_EQ(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].ax_p)[k],
+                      BL0::poly<u64>(kd->shared_a_bwd_l0_keys[j].ax_p)[k])
                 << "ax_p mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].bx_q[k], kd->shared_a_bwd_l0_keys[j].bx_q[k])
+            EXPECT_EQ(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].bx_q)[k],
+                      BL0::poly<u64>(kd->shared_a_bwd_l0_keys[j].bx_q)[k])
                 << "bx_q mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].bx_p[k], kd->shared_a_bwd_l0_keys[j].bx_p[k])
+            EXPECT_EQ(BL0::poly<u64>(kd_mem->shared_a_bwd_l0_keys[j].bx_p)[k],
+                      BL0::poly<u64>(kd->shared_a_bwd_l0_keys[j].bx_p)[k])
                 << "bx_p mismatch at j=" << j << " k=" << k;
         }
     }
@@ -521,8 +544,8 @@ TEST_F(KeyValidationTest, EvalKeySharedAIP3SaveLoad) {
 
     // Backward L0 keys — IP3 primes (30-bit), not IP0 primes
     // All backward key coefficients must be < IP3 PRIME_Q / PRIME_P
-    const u64 ip3_q = ip3_context->getParam()->getPrimeQ();
-    const u64 ip3_p = ip3_context->getParam()->getPrimeP();
+    const u64 ip3_q = ip3_context->getParam()->getQ(0);
+    const u64 ip3_p = deb_prime_at(ip3_context->getParam(), 1);
     ASSERT_LE(ip3_q, UINT32_MAX) << "IP3 Q must fit in 32 bits";
     ASSERT_LE(ip3_p, UINT32_MAX) << "IP3 P must fit in 32 bits";
 
@@ -530,20 +553,32 @@ TEST_F(KeyValidationTest, EvalKeySharedAIP3SaveLoad) {
     ASSERT_EQ(kd->shared_a_bwd_l0_keys.size(), static_cast<size_t>(nss));
     for (int j = 0; j < nss; ++j) {
         for (size_t k = 0; k < DEGREE; ++k) {
+            // IP3 uses the u32-native (polyvec32) variant alternative: the
+            // producer gates u32 on preset==IP3 -> poly<u32>. Route through poly<u32>
+            // like SearchTest.cpp's IP3 branch.
+            using BL0 = KeyPackData::BackwardL0Key;
             // Verify coefficients are within IP3 prime range
-            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].ax_q[k], ip3_q) << "ax_q exceeds IP3 Q at j=" << j << " k=" << k;
-            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].bx_q[k], ip3_q) << "bx_q exceeds IP3 Q at j=" << j << " k=" << k;
-            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].ax_p[k], ip3_p) << "ax_p exceeds IP3 P at j=" << j << " k=" << k;
-            EXPECT_LT(kd_mem->shared_a_bwd_l0_keys[j].bx_p[k], ip3_p) << "bx_p exceeds IP3 P at j=" << j << " k=" << k;
+            EXPECT_LT(BL0::poly<u32>(kd_mem->shared_a_bwd_l0_keys[j].ax_q)[k], ip3_q)
+                << "ax_q exceeds IP3 Q at j=" << j << " k=" << k;
+            EXPECT_LT(BL0::poly<u32>(kd_mem->shared_a_bwd_l0_keys[j].bx_q)[k], ip3_q)
+                << "bx_q exceeds IP3 Q at j=" << j << " k=" << k;
+            EXPECT_LT(BL0::poly<u32>(kd_mem->shared_a_bwd_l0_keys[j].ax_p)[k], ip3_p)
+                << "ax_p exceeds IP3 P at j=" << j << " k=" << k;
+            EXPECT_LT(BL0::poly<u32>(kd_mem->shared_a_bwd_l0_keys[j].bx_p)[k], ip3_p)
+                << "bx_p exceeds IP3 P at j=" << j << " k=" << k;
 
             // Serialization roundtrip
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_q[k], kd->shared_a_bwd_l0_keys[j].ax_q[k])
+            EXPECT_EQ(BL0::poly<u32>(kd_mem->shared_a_bwd_l0_keys[j].ax_q)[k],
+                      BL0::poly<u32>(kd->shared_a_bwd_l0_keys[j].ax_q)[k])
                 << "ax_q mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].ax_p[k], kd->shared_a_bwd_l0_keys[j].ax_p[k])
+            EXPECT_EQ(BL0::poly<u32>(kd_mem->shared_a_bwd_l0_keys[j].ax_p)[k],
+                      BL0::poly<u32>(kd->shared_a_bwd_l0_keys[j].ax_p)[k])
                 << "ax_p mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].bx_q[k], kd->shared_a_bwd_l0_keys[j].bx_q[k])
+            EXPECT_EQ(BL0::poly<u32>(kd_mem->shared_a_bwd_l0_keys[j].bx_q)[k],
+                      BL0::poly<u32>(kd->shared_a_bwd_l0_keys[j].bx_q)[k])
                 << "bx_q mismatch at j=" << j << " k=" << k;
-            EXPECT_EQ(kd_mem->shared_a_bwd_l0_keys[j].bx_p[k], kd->shared_a_bwd_l0_keys[j].bx_p[k])
+            EXPECT_EQ(BL0::poly<u32>(kd_mem->shared_a_bwd_l0_keys[j].bx_p)[k],
+                      BL0::poly<u32>(kd->shared_a_bwd_l0_keys[j].bx_p)[k])
                 << "bx_p mismatch at j=" << j << " k=" << k;
         }
     }

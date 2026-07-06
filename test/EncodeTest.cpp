@@ -19,8 +19,8 @@
 /// Encode32 utility tests for IP2 preset.
 ///
 /// Validates:
-/// 1. encodeToU32 round-trip precision
-/// 2. encodeToU32 matches existing u64 encoding path
+/// 1. encodeCoeffs<u32> round-trip precision
+/// 2. encodeCoeffs<u32> matches encodeCoeffs<u64> output
 /// 3. narrowToU32 / widenToU64 consistency
 /// 4. isU32Preset detection
 /// 5. IP2 precision bounds
@@ -61,19 +61,23 @@ TEST_F(Encode32Test, EncodeDecodeRoundTrip) {
         v = dist(gen_);
     }
 
-    poly32 enc_q{};
-    poly32 enc_p{};
-    encodeToU32(msg.data(), enc_q.data(), enc_p.data(), DEGREE, scale, param_);
+    // Encode into the two PRIMES_Q limbs. The second buffer is named enc_q1
+    // (not enc_p) to reflect post-refactor layout: IP2 has NumQ=2, NumP=1,
+    // and the encoder fills the Q limbs only.
+    poly32 enc_q0{};
+    poly32 enc_q1{};
+    u32 *limbs[2] = {enc_q0.data(), enc_q1.data()};
+    encodeCoeffs<u32>(msg.data(), limbs, DEGREE, scale, param_);
 
-    // Verify all encoded values < prime
+    // Verify all encoded values < the respective prime
     for (u64 i = 0; i < DEGREE; ++i) {
-        ASSERT_LT(enc_q[i], static_cast<u32>(param_.PRIME_Q)) << "q coefficient out of range at " << i;
-        ASSERT_LT(enc_p[i], static_cast<u32>(param_.PRIME_P)) << "p coefficient out of range at " << i;
+        ASSERT_LT(enc_q0[i], static_cast<u32>(IP2Base::PRIMES_Q[0])) << "Q[0] coefficient out of range at " << i;
+        ASSERT_LT(enc_q1[i], static_cast<u32>(IP2Base::PRIMES_Q[1])) << "Q[1] coefficient out of range at " << i;
     }
 
-    // Decode from q and check precision
+    // Decode from Q[0] and check precision
     std::vector<float> decoded(DEGREE);
-    decodeFromU32(enc_q.data(), decoded.data(), DEGREE, scale, param_.PRIME_Q);
+    decodeCoeffs<u32>(enc_q0.data(), decoded.data(), DEGREE, scale, IP2Base::PRIMES_Q[0]);
 
     // IP2 scale ~30.4 bits, rounding error ~ 0.5/2^30.4
     // float (23-bit mantissa) → double → i128 truncation + signBias(±1.5)
@@ -93,17 +97,19 @@ TEST_F(Encode32Test, EncodeMatchesU64Path) {
         float val = dist(gen_);
 
         u32 out32 = 0;
-        encodeCoeffs<u32>(&val, &out32, static_cast<u32 *>(nullptr), 1, scale, param_);
+        u32 *outs32[1] = {&out32};
+        encodeCoeffs<u32>(&val, outs32, 1, scale, param_, 1u);
 
         u64 out64 = 0;
-        encodeCoeffs<u64>(&val, &out64, static_cast<u64 *>(nullptr), 1, scale, param_);
+        u64 *outs64[1] = {&out64};
+        encodeCoeffs<u64>(&val, outs64, 1, scale, param_, 1u);
 
         ASSERT_EQ(static_cast<u64>(out32), out64) << "encodeCoeffs<u32> vs <u64> mismatch for val=" << val;
     }
 }
 
 TEST_F(Encode32Test, NarrowWidenRoundTrip) {
-    std::uniform_int_distribution<u32> dist(0, static_cast<u32>(param_.PRIME_Q - 1));
+    std::uniform_int_distribution<u32> dist(0, static_cast<u32>(IP2Base::PRIMES_Q[0] - 1));
 
     poly src{};
     for (u64 i = 0; i < DEGREE; ++i) {
@@ -128,10 +134,11 @@ TEST_F(Encode32Test, PrecisionBounds) {
 
     for (float val : test_values) {
         u32 enc = 0;
-        encodeToU32(&val, &enc, nullptr, 1, scale, param_);
+        u32 *outs[1] = {&enc};
+        encodeCoeffs<u32>(&val, outs, 1, scale, param_, 1u);
 
         float dec = 0;
-        decodeFromU32(&enc, &dec, 1, scale, param_.PRIME_Q);
+        decodeCoeffs<u32>(&enc, &dec, 1, scale, IP2Base::PRIMES_Q[0]);
 
         double abs_error = std::abs(static_cast<double>(dec) - val);
         double max_error = 4.0 / scale;
@@ -140,30 +147,36 @@ TEST_F(Encode32Test, PrecisionBounds) {
     }
 }
 
-TEST_F(Encode32Test, EncodeWithNullP) {
+TEST_F(Encode32Test, EncodeWithNullSecondLimb) {
     const double scale = std::pow(2.0, param_.getScaleFactor());
     float val = 0.42f;
     u32 out_q = 0;
+    u32 *limbs[2] = {&out_q, nullptr};
 
-    // Should not crash when out_p is nullptr
-    encodeToU32(&val, &out_q, nullptr, 1, scale, param_);
-    ASSERT_LT(out_q, static_cast<u32>(param_.PRIME_Q));
+    // Should not crash when limb_outs[1] is nullptr (skip second limb).
+    encodeCoeffs<u32>(&val, limbs, 1, scale, param_);
+    ASSERT_LT(out_q, static_cast<u32>(IP2Base::PRIMES_Q[0]));
 }
 
 // NTT<u32> cross-validation tests removed: deb::utils::NTT<u32> only supports
 // primes < 2^30 (butterfly intermediate 4*prime must fit u32). IP2 prime Q is
-// 32-bit. Production pipeline uses u64 NTT for all transforms; u32 is only
-// used for CTMatrix storage and PCMM accumulation.
-
+// 32-bit. Production pipeline uses u64 NTT for all transforms.
+//
+// NOTE (IP2->u64 demotion): IP2 is now a pure u64 preset (u32 storage <=>
+// preset==IP3). This test is NOT an IP2-storage-path test — it exercises
+// deb::utils::ModArith<1,u32>::mul correctness against a representative
+// 32-bit prime (IP2Base::PRIMES_Q[0], still a valid constant since IP2Base
+// is kept). Retained as-is: 32-bit-prime u32 ModArith coverage is still
+// meaningful and independent of which preset uses u32 storage.
 TEST_F(Encode32Test, ModArith32MatchesGroundTruth_IP2) {
-    deb::utils::ModArith<1, deb::u32> ma32(static_cast<deb::Size>(DEGREE), param_.PRIME_Q);
-    std::uniform_int_distribution<deb::u32> dist(0, static_cast<deb::u32>(param_.PRIME_Q - 1));
+    deb::utils::ModArith<1, deb::u32> ma32(static_cast<deb::Size>(DEGREE), IP2Base::PRIMES_Q[0]);
+    std::uniform_int_distribution<deb::u32> dist(0, static_cast<deb::u32>(IP2Base::PRIMES_Q[0] - 1));
 
     for (int trial = 0; trial < 10000; ++trial) {
         deb::u32 a = dist(gen_);
         deb::u32 b = dist(gen_);
         deb::u32 result = ma32.mul<1>(a, b);
-        deb::u64 expected = static_cast<deb::u64>((static_cast<deb::utils::u128>(a) * b) % param_.PRIME_Q);
+        deb::u64 expected = static_cast<deb::u64>((static_cast<deb::utils::u128>(a) * b) % IP2Base::PRIMES_Q[0]);
 
         ASSERT_EQ(static_cast<deb::u64>(result), expected) << "ModArith<u32> mul wrong: " << a << " * " << b;
     }

@@ -32,13 +32,14 @@ uint64_t mask_u64(unsigned w) {
     return (w == 64) ? ~0ULL : ((1ULL << w) - 1ULL);
 }
 
-size_t words_for(size_t n, unsigned w) {
+uint32_t words_for(uint32_t n, unsigned w) {
     // Caller should ensure w in [1,64]
     u128 bits = (u128)n * (u128)w;
-    return (size_t)((bits + 63) >> 6); // ceil(bits/64)
+    return (uint32_t)((bits + 63) >> 6); // ceil(bits/64)
 }
 
-size_t pack_fixedW(const uint64_t *in, size_t n, uint64_t *out_words, size_t out_cap_words, unsigned w) {
+template <class T>
+uint32_t pack_fixedW(const T *in, uint32_t n, uint64_t *out_words, uint32_t out_cap_words, unsigned w) {
     if (n == 0) {
         return 0;
     }
@@ -46,13 +47,15 @@ size_t pack_fixedW(const uint64_t *in, size_t n, uint64_t *out_words, size_t out
         return 0;
     }
 
-    const size_t need = words_for(n, w);
+    const uint32_t need = words_for(n, w);
     if (out_cap_words < need) {
         return 0;
     }
 
     if (w == 64) {
-        // Direct copy
+        // Direct copy. w==64 is only reachable for T=uint64_t (narrower
+        // value types never request a 64-bit field); the byte layout is
+        // identical to the original non-template memcpy.
         std::memcpy(out_words, in, n * sizeof(uint64_t));
         return n;
     }
@@ -61,10 +64,12 @@ size_t pack_fixedW(const uint64_t *in, size_t n, uint64_t *out_words, size_t out
 
     u128 acc = 0;      // low bits = earliest stream bits
     unsigned bits = 0; // 0..63 after each iteration
-    size_t out_i = 0;
+    uint32_t out_i = 0;
 
-    for (size_t i = 0; i < n; ++i) {
-        const uint64_t v = in[i] & m;
+    for (uint32_t i = 0; i < n; ++i) {
+        // For T=uint64_t this cast is the identity (bytes unchanged);
+        // for narrower T it equals the legacy widen-then-mask value.
+        const uint64_t v = static_cast<uint64_t>(in[i]) & m;
 
         acc |= (u128)v << bits;
         bits += w;
@@ -86,7 +91,8 @@ size_t pack_fixedW(const uint64_t *in, size_t n, uint64_t *out_words, size_t out
     return out_i;
 }
 
-bool unpack_fixedW(const uint64_t *in_words, size_t in_nwords, uint64_t *out, size_t n, unsigned w) {
+template <class T>
+bool unpack_fixedW(const uint64_t *in_words, uint32_t in_nwords, T *out, uint32_t n, unsigned w) {
     if (n == 0) {
         return true;
     }
@@ -94,12 +100,13 @@ bool unpack_fixedW(const uint64_t *in_words, size_t in_nwords, uint64_t *out, si
         return false;
     }
 
-    const size_t need = words_for(n, w);
+    const uint32_t need = words_for(n, w);
     if (in_nwords < need) {
         return false;
     }
 
     if (w == 64) {
+        // w==64 only reachable for T=uint64_t (see pack_fixedW).
         std::memcpy(out, in_words, n * sizeof(uint64_t));
         return true;
     }
@@ -108,16 +115,19 @@ bool unpack_fixedW(const uint64_t *in_words, size_t in_nwords, uint64_t *out, si
 
     u128 acc = 0;
     unsigned bits = 0;
-    size_t in_i = 0;
+    uint32_t in_i = 0;
 
-    for (size_t i = 0; i < n; ++i) {
-        // Ensure at least W bits available.
+    for (uint32_t i = 0; i < n; ++i) {
+        // Ensure at least w bits available.
         if (bits < w) {
             acc |= (u128)in_words[in_i++] << bits;
             bits += 64;
         }
 
-        out[i] = (uint64_t)(acc & m);
+        // For T=uint64_t this is the identity (bytes unchanged); for
+        // narrower T it narrows the masked value exactly as the legacy
+        // unpack-then-narrow path did.
+        out[i] = static_cast<T>(static_cast<uint64_t>(acc & m));
         acc >>= w;
         bits -= w;
     }
@@ -125,7 +135,12 @@ bool unpack_fixedW(const uint64_t *in_words, size_t in_nwords, uint64_t *out, si
     return true;
 }
 
-uint64_t get_i_fixedW(const uint64_t *in_words, size_t nwords, size_t i, unsigned w) {
+template uint32_t pack_fixedW<uint64_t>(const uint64_t *, uint32_t, uint64_t *, uint32_t, unsigned);
+template uint32_t pack_fixedW<uint32_t>(const uint32_t *, uint32_t, uint64_t *, uint32_t, unsigned);
+template bool unpack_fixedW<uint64_t>(const uint64_t *, uint32_t, uint64_t *, uint32_t, unsigned);
+template bool unpack_fixedW<uint32_t>(const uint64_t *, uint32_t, uint32_t *, uint32_t, unsigned);
+
+uint64_t get_i_fixedW(const uint64_t *in_words, uint32_t nwords, uint32_t i, unsigned w) {
     if (!valid_W(w) || !in_words) {
         return 0;
     }
@@ -136,7 +151,7 @@ uint64_t get_i_fixedW(const uint64_t *in_words, size_t nwords, size_t i, unsigne
     const uint64_t m = mask_u64(w);
     const u128 bitpos = (u128)i * (u128)w;
 
-    const size_t word_index = (size_t)(bitpos >> 6);
+    const uint32_t word_index = (uint32_t)(bitpos >> 6);
     const unsigned s = static_cast<unsigned>(static_cast<u64>(bitpos & 63));
 
     const uint64_t lo = (word_index < nwords) ? in_words[word_index] : 0ULL;

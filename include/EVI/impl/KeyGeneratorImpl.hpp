@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -91,8 +92,26 @@ private:
     void genSwitchingKey(const SecretKey &sec_key, span<u64> from_s, span<u64> out_a_q, span<u64> out_a_p,
                          span<u64> out_b_q, span<u64> out_b_p);
     void genSwitchingKeys(const SecretKey &sec_key) override;
+    // Lazily-built deb key generator, selected by the deb type KG:
+    //
+    //  - keygen<deb::KeyGenerator32>(): IP3 u32-native (runtime-preset
+    //    KeyGeneratorT<PRESET_EMPTY,u32>) so non-IP3 presets never construct a
+    //    u32 modulus. Used by genEncKey/genSwitchingKeys when
+    //    utils::isU32NativePreset(context_) holds.
+    //  - keygen<deb::KeyGenerator>(): u64 generator. IP3 MM never touches it
+    //    (enc + switching keys are u32-native), so it is never constructed
+    //    there; IP3 MMS still needs it for the u64 shared-A forward keys, and
+    //    non-IP3 presets use it for everything.
+    //
+    // Lazy construction keeps each engine's NTT/base-conversion precompute out
+    // of memory when only the other path is exercised.
+    template <class KG>
+    KG &keygen();
+
     const Context context_;
-    deb::KeyGenerator deb_keygen_;
+    std::optional<deb::KeyGenerator> deb_keygen_;
+    std::optional<deb::RNGSeed> deb_seed_;
+    std::optional<deb::KeyGenerator32> deb_keygen32_;
 
     KeyPack pack_iface_;
     std::shared_ptr<KeyPackData> pack_;

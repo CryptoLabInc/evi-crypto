@@ -64,62 +64,68 @@ void bind_encryptor(py::module_ &m) {
 
         .def(
             "encode",
-            [](Encryptor &self, const std::vector<float> &data, EncodeType type, int level,
+            [](Encryptor &self, const std::vector<float> &data, EncodeType type, std::optional<uint32_t> level,
                std::optional<float> scale) {
                 return self.encode(data, type, level, scale);
             },
-            py::arg("data"), py::arg("type"), py::arg("level") = 0, py::arg("scale") = py::none())
+            py::arg("data"), py::arg("type"), py::arg("level") = py::none(), py::arg("scale") = py::none())
 
         .def(
             "encode_bulk",
-            [](Encryptor &self, const std::vector<std::vector<float>> &msg, const EncodeType type, const int level,
-               std::optional<float> scale) {
+            [](Encryptor &self, const std::vector<std::vector<float>> &msg, const EncodeType type,
+               std::optional<uint32_t> level, std::optional<float> scale) {
                 return self.encode(msg, type, level, scale);
             },
-            py::arg("data"), py::arg("type"), py::arg("level") = 0, py::arg("scale") = py::none())
+            py::arg("data"), py::arg("type"), py::arg("level") = py::none(), py::arg("scale") = py::none())
 
         .def(
             "encrypt",
             [](Encryptor &self, const std::vector<float> &data, const std::string &enckey_path, EncodeType type,
-               int level, std::optional<float> scale) {
+               std::optional<uint32_t> level, std::optional<float> scale) {
                 return self.encrypt(data, enckey_path, type, level, scale);
             },
-            py::arg("data"), py::arg("enckey_path"), py::arg("type"), py::arg("level") = 0,
+            py::arg("data"), py::arg("enckey_path"), py::arg("type"), py::arg("level") = py::none(),
             py::arg("scale") = py::none())
 
         .def(
             "encrypt",
-            [](Encryptor &self, const std::vector<float> &data, const KeyPack &keypack, EncodeType type, int level,
-               std::optional<float> scale) {
+            [](Encryptor &self, const std::vector<float> &data, const KeyPack &keypack, EncodeType type,
+               std::optional<uint32_t> level, std::optional<float> scale) {
                 return self.encrypt(data, keypack, type, level, scale);
             },
-            py::arg("data"), py::arg("keypack"), py::arg("type"), py::arg("level") = 0, py::arg("scale") = py::none())
+            py::arg("data"), py::arg("keypack"), py::arg("type"), py::arg("level") = py::none(),
+            py::arg("scale") = py::none())
 
         .def(
             "encrypt_with_key_stream",
-            [](Encryptor &self, const std::vector<float> &data, const py::object &key_blob, EncodeType type, int level,
-               std::optional<float> scale) {
+            [](Encryptor &self, const std::vector<float> &data, const py::object &key_blob, EncodeType type,
+               std::optional<uint32_t> level, std::optional<float> scale) {
                 std::string blob = bytes_like_to_string(key_blob);
                 std::istringstream key_stream(blob, std::ios::binary);
                 return self.encrypt(data, key_stream, type, level, scale);
             },
-            py::arg("data"), py::arg("key_blob"), py::arg("type"), py::arg("level") = 0, py::arg("scale") = py::none())
+            py::arg("data"), py::arg("key_blob"), py::arg("type"), py::arg("level") = py::none(),
+            py::arg("scale") = py::none())
+
+        // call_guard releases the GIL for the native bulk encrypt (after argument
+        // conversion, reacquired before return-value conversion), matching the
+        // encrypt_row bindings below so bulk encryption can scale across threads.
+        .def("encrypt_bulk",
+             py::overload_cast<const std::vector<std::vector<float>> &, const std::string &, evi::EncodeType,
+                               std::optional<uint32_t>, std::optional<float>>(&Encryptor::encrypt, py::const_),
+             py::arg("data"), py::arg("enckey_path"), py::arg("type"), py::arg("level") = py::none(),
+             py::arg("scale") = py::none(), py::call_guard<py::gil_scoped_release>())
 
         .def("encrypt_bulk",
-             py::overload_cast<const std::vector<std::vector<float>> &, const std::string &, evi::EncodeType, int,
-                               std::optional<float>>(&Encryptor::encrypt, py::const_),
-             py::arg("data"), py::arg("enckey_path"), py::arg("type"), py::arg("level") = 0,
-             py::arg("scale") = py::none())
-
-        .def("encrypt_bulk",
-             py::overload_cast<const std::vector<std::vector<float>> &, const KeyPack &, evi::EncodeType, int,
-                               std::optional<float>>(&Encryptor::encrypt, py::const_),
-             py::arg("data"), py::arg("keypack"), py::arg("type"), py::arg("level") = 0, py::arg("scale") = py::none())
+             py::overload_cast<const std::vector<std::vector<float>> &, const KeyPack &, evi::EncodeType,
+                               std::optional<uint32_t>, std::optional<float>>(&Encryptor::encrypt, py::const_),
+             py::arg("data"), py::arg("keypack"), py::arg("type"), py::arg("level") = py::none(),
+             py::arg("scale") = py::none(), py::call_guard<py::gil_scoped_release>())
 
         .def(
             "encrypt_row",
             [](Encryptor &self, const std::vector<std::vector<float>> &data, const std::string &enckey_path,
-               EncodeType type, int level, std::optional<float> scale) {
+               EncodeType type, std::optional<uint32_t> level, std::optional<float> scale) {
                 std::vector<std::string> raw;
                 {
                     py::gil_scoped_release release;
@@ -127,13 +133,13 @@ void bind_encryptor(py::module_ &m) {
                 }
                 return serialize_rows_to_bytes(raw);
             },
-            py::arg("data"), py::arg("enckey_path"), py::arg("type"), py::arg("level") = 0,
+            py::arg("data"), py::arg("enckey_path"), py::arg("type"), py::arg("level") = py::none(),
             py::arg("scale") = py::none())
 
         .def(
             "encrypt_row",
             [](Encryptor &self, const std::vector<std::vector<float>> &data, const KeyPack &keypack, EncodeType type,
-               int level, std::optional<float> scale) {
+               std::optional<uint32_t> level, std::optional<float> scale) {
                 std::vector<std::string> raw;
                 {
                     py::gil_scoped_release release;
@@ -141,12 +147,13 @@ void bind_encryptor(py::module_ &m) {
                 }
                 return serialize_rows_to_bytes(raw);
             },
-            py::arg("data"), py::arg("keypack"), py::arg("type"), py::arg("level") = 0, py::arg("scale") = py::none())
+            py::arg("data"), py::arg("keypack"), py::arg("type"), py::arg("level") = py::none(),
+            py::arg("scale") = py::none())
 
         .def(
             "encrypt_row_with_key_stream",
             [](Encryptor &self, const std::vector<std::vector<float>> &data, const py::object &key_blob,
-               EncodeType type, int level, std::optional<float> scale) {
+               EncodeType type, std::optional<uint32_t> level, std::optional<float> scale) {
                 std::string blob = bytes_like_to_string(key_blob);
                 std::vector<std::string> raw;
                 {
@@ -156,17 +163,21 @@ void bind_encryptor(py::module_ &m) {
                 }
                 return serialize_rows_to_bytes(raw);
             },
-            py::arg("data"), py::arg("key_blob"), py::arg("type"), py::arg("level") = 0, py::arg("scale") = py::none())
+            py::arg("data"), py::arg("key_blob"), py::arg("type"), py::arg("level") = py::none(),
+            py::arg("scale") = py::none())
 
         .def(
             "encrypt_bulk_with_key_stream",
             [](Encryptor &self, const std::vector<std::vector<float>> &data, const py::object &key_blob,
-               EncodeType type, int level, std::optional<float> scale) {
+               EncodeType type, std::optional<uint32_t> level, std::optional<float> scale) {
                 std::string blob = bytes_like_to_string(key_blob);
+                // Release the GIL only after the py::object is consumed above.
+                py::gil_scoped_release release;
                 std::istringstream key_stream(blob, std::ios::binary);
                 return self.encrypt(data, key_stream, type, level, scale);
             },
-            py::arg("data"), py::arg("key_blob"), py::arg("type"), py::arg("level") = 0, py::arg("scale") = py::none())
+            py::arg("data"), py::arg("key_blob"), py::arg("type"), py::arg("level") = py::none(),
+            py::arg("scale") = py::none())
 
         .def("__repr__", [](const Encryptor &) {
             return std::string("<evi.Encryptor>");

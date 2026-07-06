@@ -24,6 +24,7 @@
 #include "EVI/Query.hpp"
 #include "EVI/SearchResult.hpp"
 #include "EVI/SecretKey.hpp"
+#include <cstddef>
 #include <istream>
 #include <memory>
 
@@ -42,11 +43,11 @@ class Decryptor;
  * ciphertexts, and search results.
  *
  * @par Thread Safety
- * **NOT thread-safe.** Concurrent calls to decrypt() on the same instance
- * produce data races (deb library mutates process-global OpenMP thread count
- * via omp_set_num_threads). Use one Decryptor per thread/goroutine, or
- * serialize access with an external mutex. See GAP-014 in
- * docs/specs/crypto/decryptor-lifecycle.md for details.
+ * **NOT thread-safe for concurrent calls on the same instance.** Use one
+ * `Decryptor` per thread/goroutine, or serialize access with a mutex.
+ * Even the blob-based `decryptBatchTopKParallel(shard_blobs, key_blob, ..., n_jobs)` overload
+ * requires external serialization at the `Decryptor` instance level; only its
+ * internal worker fan-out is thread-safe.
  */
 class EVI_API Decryptor {
 public:
@@ -136,6 +137,21 @@ public:
      * @return Decrypted `Message`.
      */
     Message decrypt(int idx, const Query &ctxt, const SecretKey &seckey, std::optional<double> scale = std::nullopt);
+
+    /**
+     * @brief Parallel-safe decryptBatchTopKParallel from serialized shard blobs.
+     *
+     * Each worker deserializes its assigned shard blob and immediately decrypts
+     * it using the request-scoped shared key, avoiding a separate deserialize
+     * thread wave before decryptBatchTopKParallel.
+     *
+     * The actual worker count is clamped to
+     * `min(max(n_jobs, 1), shard_count, ceil(shard_count / 2))`.
+     */
+    std::vector<std::tuple<int, int, float>>
+    decryptBatchTopKParallel(const char *const *shard_blobs, const std::size_t *shard_blob_lens,
+                             std::size_t shard_count, const char *key_blob, std::size_t key_blob_len, int k,
+                             std::optional<double> scale = std::nullopt, int n_jobs = 1);
 
 private:
     std::shared_ptr<detail::Decryptor> impl_;

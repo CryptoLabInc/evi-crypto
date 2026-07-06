@@ -60,20 +60,61 @@ set(DEB_MEMORY_ALIGN_SIZE
 # (registered from evi/external/). Standalone crypto/ builds register it here.
 # See evi-monorepo-structure-v1.md §5.3.
 if(NOT TARGET deb)
+  if(DEFINED ENV{GITHUB_TOKEN})
+    set(DEB_GIT_REPOSITORY
+        "https://$ENV{GITHUB_TOKEN}@github.com/CryptoLabInc/deb-private.git")
+  else()
+    set(DEB_GIT_REPOSITORY git@github.com:CryptoLabInc/deb-private.git)
+  endif()
   cpmaddpackage(
     NAME
     deb
-    GITHUB_REPOSITORY
-    CryptoLabInc/deb
+    GIT_REPOSITORY
+    "${DEB_GIT_REPOSITORY}"
     GIT_TAG
-    de429000b1ca577596ac11e18d46319ff3052d7f # deb main (includes u32 support)
+    c475f78501ebbee2f9503ba7d84d3febfca49b45 # deb-private main
     OPTIONS
     "DEB_BUILD_EXAMPLES OFF"
     "DEB_BUILD_TEST OFF"
     "DEB_BUILD_WITH_OMP OFF"
+    "DEB_INSTALL OFF"
     "DEB_INSTALL_ALEA ON"
     "DEB_RUNTIME_RESOURCE_CHECK OFF"
+    "DEB_SUPPORT_U64 ON"
     "DEB_SUPPORT_U32 ON")
+endif()
+
+if(NOT TARGET heaan::ntt)
+  cpmaddpackage(
+    NAME
+    evi-ntt
+    GITHUB_REPOSITORY
+    CryptoLabInc/evi-ntt
+    GIT_TAG
+    9af57f65685c8fb7e30d2d718b0772d32d8d92e7
+    OPTIONS
+    "NTT_BUILD_TESTS OFF")
+endif()
+
+if(EVI_DISABLE_X86_AVX AND TARGET heaan_ntt)
+  get_target_property(_HEAAN_NTT_SOURCES heaan_ntt SOURCES)
+  if(_HEAAN_NTT_SOURCES)
+    list(FILTER _HEAAN_NTT_SOURCES EXCLUDE REGEX "NTTAvx(2|512)\\.cpp$")
+    set_target_properties(heaan_ntt PROPERTIES SOURCES "${_HEAAN_NTT_SOURCES}")
+  endif()
+
+  get_target_property(_HEAAN_NTT_DEFS heaan_ntt COMPILE_DEFINITIONS)
+  if(_HEAAN_NTT_DEFS)
+    list(REMOVE_ITEM _HEAAN_NTT_DEFS HEAAN_NTT_HAS_AVX2_BUILD
+         HEAAN_NTT_HAS_AVX512_BUILD)
+    set_target_properties(heaan_ntt PROPERTIES COMPILE_DEFINITIONS
+                                               "${_HEAAN_NTT_DEFS}")
+  endif()
+
+  message(
+    STATUS
+      "EVI_DISABLE_X86_AVX=ON: x86 AVX flags disabled and heaan_ntt AVX sources removed"
+  )
 endif()
 
 # ---------------------------------------------------------

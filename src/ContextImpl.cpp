@@ -33,9 +33,9 @@ namespace evi {
 namespace detail {
 ContextImpl::ContextImpl(const evi::ParameterPreset preset, const evi::DeviceType device_type, const u64 rank,
                          const evi::EvalMode eval_mode, std::optional<const int> device_id)
-    : param_(setPreset(preset)), dtype_(device_type), mode_(eval_mode), ntt_q_{DEGREE, param_->getPrimeQ()},
-      ntt_q_rank_{DEGREE, param_->getPrimeQ(), DEGREE / rank}, ntt_p_{DEGREE, param_->getPrimeP()},
-      ntt_p_rank_{DEGREE, param_->getPrimeP(), DEGREE / rank} {
+    : param_(setPreset(preset)), dtype_(device_type), mode_(eval_mode), ntt_q_{DEGREE, param_->getQ(0)},
+      ntt_q_rank_{DEGREE, param_->getQ(0), DEGREE / rank}, ntt_p_{DEGREE, deb_prime_at(param_, 1)},
+      ntt_p_rank_{DEGREE, deb_prime_at(param_, 1), DEGREE / rank} {
     switch (eval_mode) {
     case evi::EvalMode::RMP:
         show_rank_ = rank;
@@ -102,7 +102,7 @@ ContextImpl::ContextImpl(const evi::ParameterPreset preset, const evi::DeviceTyp
 ContextImpl::ContextImpl(evi::ParameterPreset preset, const u64 rank, u64 prime_q, u64 prime_p, u64 psi_q, u64 psi_p,
                          double scale_factor, u32 hamming_weight)
     : param_(setPreset(preset, prime_q, prime_p, psi_q, psi_p, scale_factor, hamming_weight)), dtype_(DeviceType::CPU),
-      mode_(EvalMode::FLAT), ntt_q_{DEGREE, param_->getPrimeQ()}, ntt_p_{DEGREE, param_->getPrimeP()}, rank_(rank) {
+      mode_(EvalMode::FLAT), ntt_q_{DEGREE, param_->getQ(0)}, ntt_p_{DEGREE, deb_prime_at(param_, 1)}, rank_(rank) {
 
     show_rank_ = 0;
     pad_rank_ = isPowerOfTwo(rank_) ? rank_ : nextPowerOfTwo(rank_);
@@ -121,65 +121,77 @@ ContextImpl::~ContextImpl() {
 
 void ContextImpl::negateModQ(span<u64> poly) {
     for (u64 i = 0; i < DEGREE; i++) {
-        poly[i] = param_->getPrimeQ() - poly[i];
+        poly[i] = param_->getQ(0) - poly[i];
     }
 }
 
 void ContextImpl::negateModP(span<u64> poly) {
     for (int i = 0; i < DEGREE; i++) {
-        poly[i] = param_->getPrimeP() - poly[i];
+        poly[i] = deb_prime_at(param_, 1) - poly[i];
     }
 }
 
 void ContextImpl::addModQ(const span<u64> op1, const span<u64> op2, span<u64> res) {
     for (u64 i = 0; i < DEGREE; ++i) {
         res[i] = op1[i] + op2[i];
-        res[i] = subIfGEModI64(res[i], param_->getPrimeQ());
+        res[i] = subIfGEModI64(res[i], param_->getQ(0));
     }
 }
 
 void ContextImpl::addModP(const span<u64> op1, const span<u64> op2, span<u64> res) {
     for (u64 i = 0; i < DEGREE; ++i) {
         res[i] = op1[i] + op2[i];
-        res[i] = subIfGEModI64(res[i], param_->getPrimeP());
+        res[i] = subIfGEModI64(res[i], deb_prime_at(param_, 1));
     }
 }
 
 void ContextImpl::multModQ(const span<u64> op1, const span<u64> op2, span<u64> res) {
     for (u64 i = 0; i < DEGREE; ++i) {
-        res[i] = mulMod(param_->getPrimeQ(), param_->getTwoPrimeQ(), param_->getTwoTo64Q(), param_->getTwoTo64ShoupQ(),
-                        param_->getBarrRatioQ(), op1[i], op2[i]);
+        res[i] = mulMod(param_->getQ(0), param_->getTwoPrimeQ(0), param_->getTwoTo64Q(0), param_->getTwoTo64ShoupQ(0),
+                        param_->getBarrRatioQ(0), op1[i], op2[i]);
     }
 }
 
 void ContextImpl::multModP(const span<u64> op1, const span<u64> op2, span<u64> res) {
+    // deb-flat[1]: chain[1] for multi-Q presets (IP1+), aux[0] for single-Q.
+    const bool multi_q = param_->getNumQ() > 1;
+    const u64 mod_p1 = deb_prime_at(param_, 1);
+    const u64 two_p1 = multi_q ? param_->getTwoPrimeQ(1) : param_->getTwoPrimeP(0);
+    const u64 t64_p1 = multi_q ? param_->getTwoTo64Q(1) : param_->getTwoTo64P(0);
+    const u64 t64sh_p1 = multi_q ? param_->getTwoTo64ShoupQ(1) : param_->getTwoTo64ShoupP(0);
+    const u64 barr_p1 = multi_q ? param_->getBarrRatioQ(1) : param_->getBarrRatioP(0);
     for (u64 i = 0; i < DEGREE; ++i) {
-        res[i] = mulMod(param_->getPrimeP(), param_->getTwoPrimeP(), param_->getTwoTo64P(), param_->getTwoTo64ShoupP(),
-                        param_->getBarrRatioP(), op1[i], op2[i]);
+        res[i] = mulMod(mod_p1, two_p1, t64_p1, t64sh_p1, barr_p1, op1[i], op2[i]);
     }
 }
 
 void ContextImpl::madModQ(const span<u64> op1, const span<u64> op2, span<u64> res) {
     for (u64 i = 0; i < DEGREE; ++i) {
-        res[i] += mulMod(param_->getPrimeQ(), param_->getTwoPrimeQ(), param_->getTwoTo64Q(), param_->getTwoTo64ShoupQ(),
-                         param_->getBarrRatioQ(), op1[i], op2[i]);
-        res[i] = subIfGEModI64(res[i], param_->getPrimeQ());
+        res[i] += mulMod(param_->getQ(0), param_->getTwoPrimeQ(0), param_->getTwoTo64Q(0), param_->getTwoTo64ShoupQ(0),
+                         param_->getBarrRatioQ(0), op1[i], op2[i]);
+        res[i] = subIfGEModI64(res[i], param_->getQ(0));
     }
 }
 
 void ContextImpl::madModQ(const span<u64> op1, const u64 op2, span<u64> res) {
     for (u64 i = 0; i < DEGREE; ++i) {
-        res[i] += mulMod(param_->getPrimeQ(), param_->getTwoPrimeQ(), param_->getTwoTo64Q(), param_->getTwoTo64ShoupQ(),
-                         param_->getBarrRatioQ(), op1[i], op2);
-        res[i] = subIfGEModI64(res[i], param_->getPrimeQ());
+        res[i] += mulMod(param_->getQ(0), param_->getTwoPrimeQ(0), param_->getTwoTo64Q(0), param_->getTwoTo64ShoupQ(0),
+                         param_->getBarrRatioQ(0), op1[i], op2);
+        res[i] = subIfGEModI64(res[i], param_->getQ(0));
     }
 }
 
 void ContextImpl::madModP(const span<u64> op1, const span<u64> op2, span<u64> res) {
+    // deb-flat[1]: chain[1] for multi-Q presets (IP1+), aux[0] for single-Q.
+    const bool multi_q = param_->getNumQ() > 1;
+    const u64 mod_p1 = deb_prime_at(param_, 1);
+    const u64 two_p1 = multi_q ? param_->getTwoPrimeQ(1) : param_->getTwoPrimeP(0);
+    const u64 t64_p1 = multi_q ? param_->getTwoTo64Q(1) : param_->getTwoTo64P(0);
+    const u64 t64sh_p1 = multi_q ? param_->getTwoTo64ShoupQ(1) : param_->getTwoTo64ShoupP(0);
+    const u64 barr_p1 = multi_q ? param_->getBarrRatioQ(1) : param_->getBarrRatioP(0);
     for (u64 i = 0; i < DEGREE; ++i) {
-        res[i] += mulMod(param_->getPrimeP(), param_->getTwoPrimeP(), param_->getTwoTo64P(), param_->getTwoTo64ShoupP(),
-                         param_->getBarrRatioP(), op1[i], op2[i]);
-        res[i] = subIfGEModI64(res[i], param_->getPrimeP());
+        res[i] += mulMod(mod_p1, two_p1, t64_p1, t64sh_p1, barr_p1, op1[i], op2[i]);
+        res[i] = subIfGEModI64(res[i], mod_p1);
     }
 }
 
@@ -260,14 +272,14 @@ void ContextImpl::inttModQ(span<u64> poly, u64 fullmod) {
 
 void ContextImpl::modDown(span<u64> poly_q, span<u64> poly_p) {
     inttModP(poly_p);
-    normalizeMod(poly_p, poly_p, param_->getPrimeP(), param_->getPrimeQ(), param_->getBarrRatioQ());
+    normalizeMod(poly_p, poly_p, deb_prime_at(param_, 1), param_->getQ(0), param_->getBarrRatioQ(0));
     nttModQ(poly_p);
-    u64 approx_quotient = divide128By64Lo(param_->getModDownProdInverseModEnd(), 0, param_->getPrimeQ());
+    u64 approx_quotient = divide128By64Lo(param_->getModDownProdInverseModEnd(), 0, param_->getQ(0));
     for (u64 i = 0; i < DEGREE; i++) {
-        u64 tmp = param_->getPrimeQ() - poly_p[i] + poly_q[i];
-        poly_q[i] = mulModLazy(tmp, param_->getModDownProdInverseModEnd(), approx_quotient, param_->getPrimeQ());
-        if (poly_q[i] >= param_->getPrimeQ()) {
-            poly_q[i] -= param_->getPrimeQ();
+        u64 tmp = param_->getQ(0) - poly_p[i] + poly_q[i];
+        poly_q[i] = mulModLazy(tmp, param_->getModDownProdInverseModEnd(), approx_quotient, param_->getQ(0));
+        if (poly_q[i] >= param_->getQ(0)) {
+            poly_q[i] -= param_->getQ(0);
         }
     }
 }
@@ -275,7 +287,9 @@ void ContextImpl::modDown(span<u64> poly_q, span<u64> poly_p) {
 void ContextImpl::modUp(const span<u64> poly_q, span<u64> poly_p) {
     std::memcpy(poly_p.data(), poly_q.data(), U64_DEGREE);
     inttModQ(poly_p);
-    normalizeMod(poly_p, poly_p, param_->getPrimeQ(), param_->getPrimeP(), param_->getBarrRatioP());
+    // deb-flat[1] Barrett ratio: chain[1] for multi-Q, aux[0] for single-Q.
+    const u64 barr_p1 = param_->getNumQ() > 1 ? param_->getBarrRatioQ(1) : param_->getBarrRatioP(0);
+    normalizeMod(poly_p, poly_p, param_->getQ(0), deb_prime_at(param_, 1), barr_p1);
     nttModP(poly_p);
 }
 

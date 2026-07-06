@@ -96,6 +96,11 @@ public:
     static void serializeTo(const Query &query, std::ostream &os);
 
     /**
+     * @brief Serialize a Query; TRUNC truncates each block's b-part to `n` (V3).
+     */
+    static void serializeTo(const Query &query, std::ostream &os, BTruncMode mode);
+
+    /**
      * @brief Write Query to a string.
      * @param query Query to serialize.
      * @param out Output string to receive serialized data.

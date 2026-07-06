@@ -505,8 +505,8 @@ evi::KeyEntryMetadata makeEvalKeyMetadataFromPayloadJson(const json &payload_jso
     try {
         auto preset = evi::detail::utils::stringToPreset(preset_str);
         auto param = evi::detail::setPreset(preset);
-        metadata.parameter = {param->getPrimeQ(), param->getPrimeP(), param->getDBScaleFactor(),
-                              param->getQueryScaleFactor(), preset_str};
+        metadata.parameter = {evi::detail::deb_prime_at(param.get(), 0), evi::detail::deb_prime_at(param.get(), 1),
+                              param->getDBScaleFactor(), param->getQueryScaleFactor(), preset_str};
     } catch (const evi::InvalidInputError &) {
     }
     return metadata;
@@ -516,8 +516,8 @@ bool assignParameterMetadata(evi::KeyEntryMetadata &metadata, const std::string 
     try {
         auto preset = evi::detail::utils::stringToPreset(preset_str);
         auto param = evi::detail::setPreset(preset);
-        metadata.parameter = {param->getPrimeQ(), param->getPrimeP(), param->getDBScaleFactor(),
-                              param->getQueryScaleFactor(), preset_str};
+        metadata.parameter = {evi::detail::deb_prime_at(param.get(), 0), evi::detail::deb_prime_at(param.get(), 1),
+                              param->getDBScaleFactor(), param->getQueryScaleFactor(), preset_str};
         return true;
     } catch (const evi::InvalidInputError &) {
         return false;
@@ -995,7 +995,7 @@ ProviderEntry makeProviderEntryFromPayload(const std::string &name, const std::s
         try {
             auto preset = evi::detail::utils::stringToPreset(candidate);
             auto param = evi::detail::setPreset(preset);
-            entry.metadata.parameter = {param->getPrimeQ(), param->getPrimeP(), param->getDBScaleFactor(),
+            entry.metadata.parameter = {param->getQ(0), deb_prime_at(param, 1), param->getDBScaleFactor(),
                                         param->getQueryScaleFactor(), candidate};
             return true;
         } catch (const evi::InvalidInputError &) {
@@ -1255,12 +1255,8 @@ static bool decodeEnvelopeKeyDataToStreamSeekable(std::istream &stream, std::ost
         throw evi::InvalidInputError("Failed to parse key envelope from " + std::string(err.what()));
     }
 
-    if (key_id != nullptr) {
-        *key_id = requireNonEmptyStringField(envelope, "kid", "Key envelope");
-    }
-
     const EnvelopeDecodeInfo info = validateEnvelopeMetadataForDecode(envelope, expected_usage);
-    if (key_id != nullptr && *key_id != info.kid) {
+    if (key_id != nullptr) {
         *key_id = info.kid;
     }
 

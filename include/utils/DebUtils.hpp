@@ -39,6 +39,20 @@ namespace utils {
 
 deb::Preset getDebPreset(const detail::Context &context);
 
+// Single source of truth for the IP3 u32-native gate: the context runs the
+// u32-native deb path (keygen/encrypt/keyswitch in deb::*32) iff its preset is
+// IP3 and it is on CPU. Mirrors the isU32Matrix() <=> preset==IP3 invariant,
+// plus the CPU restriction of the u32 deb backend. (Distinct from
+// Encode.hpp's isU32Preset(ParameterPreset), which is an IP2 storage-width
+// check with different semantics.)
+bool isU32NativePreset(const detail::Context &context);
+
+// Single source of truth for the backward-L0-key u32/u64 storage variant,
+// shared by the writer (KeyGeneratorImpl) and the reader (KeyPackImpl) so the
+// two sides decide identically. Same preset==IP3 condition as isU32NativePreset
+// but WITHOUT the CPU/device check: key storage is device-agnostic.
+bool isU32BackwardKey(const detail::Context &context);
+
 deb::Preset getDebPreset(const std::string &preset);
 
 deb::Size getDebNumP(const detail::Context &context);
@@ -54,8 +68,21 @@ bool syncFixedKeyToDebSwkKey(const detail::Context &context, const detail::Fixed
 bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::VariadicKeyType &variadic,
                            deb::SwitchKey &swk);
 
-deb::Ciphertext convertPointerToDebCipher(const detail::Context &context, detail::u64 *a_q, detail::u64 *b_q,
-                                          detail::u64 *a_p = nullptr, detail::u64 *b_p = nullptr, bool is_ntt = true);
+// Wrap caller-owned limb buffers in a deb::CiphertextT<U> (zero-copy via
+// PolyUnitT<U>::setData) so deb's Encryptor writes the ciphertext in-place.
+// a_p/b_p == nullptr => level 0. Instantiated for u64 and the IP3 u32-native
+// path (IP3 primes < 2^32). Element type U is deduced from the buffer pointers;
+// pass it explicitly (e.g. convertPointerToDebCipher<u64>(...)) when a_p/b_p
+// are a bare nullptr so deduction has a width to use.
+template <typename U>
+deb::CiphertextT<U> convertPointerToDebCipher(const detail::Context &context, U *a_q, U *b_q, U *a_p = nullptr,
+                                              U *b_p = nullptr, bool is_ntt = true);
+
+template <typename U>
+deb::SecretKeyT<U> makeDebSecretKey(deb::Preset preset, const deb::SecretKey &src);
+
+template <typename U>
+deb::SecretKeyT<U> makeDirectRootDebSecretKey(deb::Preset preset, const deb::SecretKey &src);
 
 deb::Ciphertext convertSingleCipherToDebCipher(const detail::Context &context,
                                                detail::SingleBlock<DataType::CIPHER> &cipher, bool is_ntt = true);

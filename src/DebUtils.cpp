@@ -18,12 +18,31 @@
 
 #include "utils/DebUtils.hpp"
 
+#include <deb/SecretKeyGenerator.hpp>
+#include <deb/utils/NTT.hpp>
+
 #include <algorithm>
 #include <cstring>
 
 namespace evi {
 namespace detail {
 namespace utils {
+namespace {
+
+constexpr auto kCoeffNttType = deb::utils::NTTType::NEGACYCLIC;
+constexpr auto kCoeffRootType = deb::utils::NTTRootType::MIN;
+
+// Single coeff-domain NTT-state setter for any deb word width (u32/u64).
+template <typename U>
+void setCoeffNttState(deb::CiphertextT<U> &cipher, bool is_ntt) {
+    if (is_ntt) {
+        cipher.setNTT(kCoeffNttType, kCoeffRootType);
+    } else {
+        cipher.setNTT(deb::utils::NTTType::NONNTT);
+    }
+}
+
+} // namespace
 
 deb::Preset getDebPreset(const detail::Context &context) {
     switch (context->getParam()->getPreset()) {
@@ -57,6 +76,21 @@ deb::Preset getDebPreset(const std::string &preset) {
     } else {
         throw InvalidInputError("Invalid preset in context");
     }
+}
+
+bool isU32NativePreset(const detail::Context &context) {
+    return context->getParam()->getPreset() == evi::ParameterPreset::IP3 &&
+           context->getDeviceType() == evi::DeviceType::CPU;
+}
+
+bool isU32BackwardKey(const detail::Context &context) {
+    // Single source of truth for the backward-L0-key u32/u64 variant decision,
+    // shared by the writer (KeyGeneratorImpl) and reader (KeyPackImpl) so the two
+    // sides cannot drift. Unlike isU32NativePreset there is NO device check: key
+    // storage is device-agnostic (the same IP3 keyset is used on CPU and GPU), so
+    // the variant is gated on preset alone. IP3 -> u32; all others (incl. IP2
+    // after its u64 demotion) -> u64.
+    return context->getParam()->getPreset() == evi::ParameterPreset::IP3;
 }
 
 deb::Size getDebNumP(const detail::Context &context) {
@@ -127,7 +161,7 @@ bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::Variadi
 
     if (swk.axSize() != ax_size) {
         swk.getAx().clear();
-        swk.addAx(num_p, ax_size, true);
+        swk.addAx(num_p, ax_size, kCoeffNttType, kCoeffRootType);
     }
     for (deb::Size i = 0; i < ax_size; ++i) {
         for (deb::Size pj = 0; pj < num_p; ++pj) {
@@ -137,7 +171,7 @@ bool syncVarKeyToDebSwkKey(const detail::Context &context, const detail::Variadi
 
     if (swk.bxSize() != bx_size) {
         swk.getBx().clear();
-        swk.addBx(num_p, bx_size, true);
+        swk.addBx(num_p, bx_size, kCoeffNttType, kCoeffRootType);
     }
     for (deb::Size i = 0; i < bx_size; ++i) {
         for (deb::Size pj = 0; pj < num_p; ++pj) {
@@ -154,7 +188,7 @@ deb::Ciphertext convertSingleCipherToDebCipher(const detail::Context &context,
     deb_cipher[1][0].setData(cipher.getPoly(1, 0).data(), detail::DEGREE);
     deb_cipher[0][0].setData(cipher.getPoly(0, 0).data(), detail::DEGREE);
     deb_cipher.setEncoding(deb::COEFF);
-    deb_cipher.setNTT(is_ntt);
+    setCoeffNttState(deb_cipher, is_ntt);
     if (cipher.getLevel() != 0) {
         deb_cipher[1][1].setData(cipher.getPoly(1, 1).data(), detail::DEGREE);
         deb_cipher[0][1].setData(cipher.getPoly(0, 1).data(), detail::DEGREE);
@@ -162,10 +196,11 @@ deb::Ciphertext convertSingleCipherToDebCipher(const detail::Context &context,
     return deb_cipher;
 }
 
-deb::Ciphertext convertPointerToDebCipher(const detail::Context &context, detail::u64 *a_q, detail::u64 *b_q,
-                                          detail::u64 *a_p, detail::u64 *b_p, bool is_ntt) {
+template <typename U>
+deb::CiphertextT<U> convertPointerToDebCipher(const detail::Context &context, U *a_q, U *b_q, U *a_p, U *b_p,
+                                              bool is_ntt) {
     deb::Size level = (a_p != nullptr && b_p != nullptr) ? 1 : 0;
-    deb::Ciphertext deb_cipher(getDebPreset(context), level, 2);
+    deb::CiphertextT<U> deb_cipher(getDebPreset(context), level, 2);
     deb_cipher[1][0].setData(a_q, detail::DEGREE);
     deb_cipher[0][0].setData(b_q, detail::DEGREE);
     if (level == 1) {
@@ -173,9 +208,29 @@ deb::Ciphertext convertPointerToDebCipher(const detail::Context &context, detail
         deb_cipher[0][1].setData(b_p, detail::DEGREE);
     }
     deb_cipher.setEncoding(deb::COEFF);
-    deb_cipher.setNTT(is_ntt);
+    setCoeffNttState(deb_cipher, is_ntt);
     return deb_cipher;
 }
+
+// Explicit instantiations: u64 (all non-IP3 presets) and u32 (IP3 native path).
+template deb::Ciphertext convertPointerToDebCipher<detail::u64>(const detail::Context &, detail::u64 *, detail::u64 *,
+                                                                detail::u64 *, detail::u64 *, bool);
+template deb::Ciphertext32 convertPointerToDebCipher<u32>(const detail::Context &, u32 *, u32 *, u32 *, u32 *, bool);
+
+template <typename U>
+deb::SecretKeyT<U> makeDebSecretKey(deb::Preset preset, const deb::SecretKey &src) {
+    return deb::SecretKeyGeneratorT<U>::GenSecretKeyFromCoeff(preset, src.coeffs());
+}
+template deb::SecretKey makeDebSecretKey<detail::u64>(deb::Preset, const deb::SecretKey &);
+template deb::SecretKey32 makeDebSecretKey<u32>(deb::Preset, const deb::SecretKey &);
+
+template <typename U>
+deb::SecretKeyT<U> makeDirectRootDebSecretKey(deb::Preset preset, const deb::SecretKey &src) {
+    deb::utils::ScopedNTTRootType direct_root(deb::utils::NTTRootType::DIRECT);
+    return deb::SecretKeyGeneratorT<U>::GenSecretKeyFromCoeff(preset, src.coeffs());
+}
+template deb::SecretKey makeDirectRootDebSecretKey<detail::u64>(deb::Preset, const deb::SecretKey &);
+template deb::SecretKey32 makeDirectRootDebSecretKey<u32>(deb::Preset, const deb::SecretKey &);
 
 deb::Preset getDebPreset(evi::ParameterPreset preset) {
     switch (preset) {
@@ -201,7 +256,7 @@ deb::Ciphertext convertPointerToDebCipherWithPreset(evi::ParameterPreset preset,
     deb_cipher[1][0].setData(a_q, detail::DEGREE);
     deb_cipher[0][0].setData(b_q, detail::DEGREE);
     deb_cipher.setEncoding(deb::COEFF);
-    deb_cipher.setNTT(is_ntt);
+    setCoeffNttState(deb_cipher, is_ntt);
     return deb_cipher;
 }
 

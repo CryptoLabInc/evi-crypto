@@ -124,6 +124,34 @@ void bind_decryptor(py::module_ &m) {
             },
             py::arg("index"), py::arg("query"), py::arg("secret_key"), py::arg("scale") = py::none())
 
+        // ---- bulk decrypt + topk ----
+        .def(
+            "decrypt_batch_topk_parallel",
+            [](Decryptor &self, const std::vector<py::object> &shard_blobs_py, const py::object &key_blob_py, int k,
+               std::optional<double> scale, int n_jobs) {
+                std::string key_blob = bytes_like_to_string(key_blob_py);
+                SensitiveDataGuard guard(key_blob);
+
+                std::vector<std::string> shard_strings;
+                shard_strings.reserve(shard_blobs_py.size());
+                for (const auto &s : shard_blobs_py)
+                    shard_strings.push_back(bytes_like_to_string(s));
+
+                std::vector<const char *> ptrs;
+                std::vector<std::size_t> lens;
+                ptrs.reserve(shard_strings.size());
+                lens.reserve(shard_strings.size());
+                for (const auto &s : shard_strings) {
+                    ptrs.push_back(s.data());
+                    lens.push_back(s.size());
+                }
+
+                return self.decryptBatchTopKParallel(ptrs.data(), lens.data(), ptrs.size(), key_blob.data(),
+                                                     key_blob.size(), k, scale, n_jobs);
+            },
+            py::arg("shard_blobs"), py::arg("key_blob"), py::arg("k"), py::arg("scale") = py::none(),
+            py::arg("n_jobs") = 1)
+
         .def("__repr__", [](const Decryptor &) {
             return std::string("<evi.Decryptor>");
         });

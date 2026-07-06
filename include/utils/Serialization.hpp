@@ -23,7 +23,9 @@
 #include <cstdint>
 #include <cstring>
 #include <istream>
+#include <limits>
 #include <ostream>
+#include <type_traits>
 #include <vector>
 
 namespace evi {
@@ -35,10 +37,18 @@ namespace serialization {
 
 constexpr char kMagic[4] = {'E', 'V', 'I', 'S'};
 constexpr uint8_t kVersionV1 = 1;
-// V2 adds: IData::preset (u8) after prime_p_bits in Matrix<T>::serializeTo.
-// Everything else in the payload is unchanged. V1 readers treat preset
-// as ParameterPreset::RUNTIME (same as context, no base conversion).
+// V2 semantics depend on the data type:
+//   Matrix<T>:    adds IData::preset (u8) after prime_p_bits. V1 readers treat
+//                 preset as ParameterPreset::RUNTIME (no base conversion).
+//   SingleBlock<CIPHER>: writer opts in via serializeTo(stream, BTruncMode::TRUNC).
+//                        b-part carries `dim` coefficients when dim < DEGREE, or full
+//                        DEGREE when dim == DEGREE (the V2 marker is kept either way so
+//                        the wire format is stable for a fixed call site). On decode
+//                        b[dim..DEGREE) is zero-filled. a-part is always full DEGREE.
 constexpr uint8_t kVersionV2 = 2;
+// V3: adds b_trunc_mode + b_trunc_len fields to the SingleBlock<CIPHER>/Matrix
+// envelope after coeff_width. Readers strict-fail-closed on unknown modes.
+constexpr uint8_t kVersionV3 = 3;
 
 struct HeaderInfo {
     bool has_header = false;
@@ -100,28 +110,44 @@ inline uint8_t bitLengthU64(uint64_t v) {
     return bits;
 }
 
-inline void writePackedU64(std::ostream &stream, const u64 *data, std::size_t count, unsigned w) {
+// Templated packed (de)serializers. Wire-format invariant: the packed
+// payload depends only on the masked values (coeff & ((1<<w)-1)) and width
+// `w`, never on the source integer type, so u32 and u64 emit byte-identical
+// bytes via the single canonical bitpack::pack_fixedW/unpack_fixedW.
+template <class T>
+inline void writePacked(std::ostream &stream, const T *data, std::size_t count, unsigned w) {
     if (!bitpack::valid_W(w)) {
         throw evi::InvalidInputError("Invalid bit width for packed serialization");
     }
+    if (count > std::numeric_limits<uint32_t>::max()) {
+        throw evi::InvalidInputError("packed serialization count exceeds uint32_t range");
+    }
     const std::size_t words = bitpack::words_for(count, w);
     std::vector<u64> packed(words);
-    const std::size_t wrote = bitpack::pack_fixedW(data, count, packed.data(), words, w);
-    if (wrote != words) {
-        throw evi::InvalidInputError("Failed to pack data for serialization");
+    if (count != 0) {
+        const std::size_t wrote = bitpack::pack_fixedW<T>(data, count, packed.data(), words, w);
+        if (wrote != words) {
+            throw evi::InvalidInputError("Failed to pack data for serialization");
+        }
     }
     stream.write(reinterpret_cast<const char *>(packed.data()), words * sizeof(u64));
 }
 
-inline void readPackedU64(std::istream &stream, u64 *data, std::size_t count, unsigned w) {
+template <class T>
+inline void readPacked(std::istream &stream, T *data, std::size_t count, unsigned w) {
     if (!bitpack::valid_W(w)) {
         throw evi::InvalidInputError("Invalid bit width for packed deserialization");
+    }
+    if (count > std::numeric_limits<uint32_t>::max()) {
+        throw evi::InvalidInputError("packed deserialization count exceeds uint32_t range");
     }
     const std::size_t words = bitpack::words_for(count, w);
     std::vector<u64> packed(words);
     stream.read(reinterpret_cast<char *>(packed.data()), words * sizeof(u64));
-    if (!bitpack::unpack_fixedW(packed.data(), words, data, count, w)) {
-        throw evi::InvalidInputError("Failed to unpack data for deserialization");
+    if (count != 0) {
+        if (!bitpack::unpack_fixedW<T>(packed.data(), words, data, count, w)) {
+            throw evi::InvalidInputError("Failed to unpack data for deserialization");
+        }
     }
 }
 

@@ -33,7 +33,9 @@
 #include <istream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // deb header
@@ -95,6 +97,13 @@ struct SecretKeyData {
     const deb::SecretKey &getDebSecKey() const {
         return deb_sk_;
     }
+    const deb::SecretKey &getDirectRootDebSecKey(deb::Preset preset) const;
+
+    // u32 embedding of the same secret, default root (IP3 keygen/encrypt).
+    const deb::SecretKey32 &getDebSecKey32(deb::Preset preset) const;
+
+    // u32 embedding, DIRECT root (IP3 evi-ntt decrypt path).
+    const deb::SecretKey32 &getDirectRootDebSecKey32(deb::Preset preset) const;
 
     evi::ParameterPreset preset_;
     bool sec_loaded_;
@@ -104,13 +113,46 @@ struct SecretKeyData {
 
 private:
     void reset() noexcept;
+    void clearDerivedDebSecKeyCache() const noexcept;
+
+    // Per-preset cache of a deb key derived from deb_sk_; zeroized on clear/rebuild.
+    template <typename U>
+    struct DerivedKeyCache {
+        std::optional<deb::SecretKeyT<U>> key;
+        deb::Preset preset = deb::PRESET_EMPTY;
+
+        void clear() noexcept {
+            static_assert(noexcept(std::declval<deb::SecretKeyT<U> &>().zeroize()),
+                          "deb::SecretKeyT::zeroize must be noexcept");
+            if (key) {
+                key->zeroize();
+                key.reset();
+            }
+            preset = deb::PRESET_EMPTY;
+        }
+
+        // Rebuilds via make(want) when empty or built for a different preset.
+        template <typename Factory>
+        const deb::SecretKeyT<U> &getOrBuild(deb::Preset want, Factory &&make) {
+            if (!key || preset != want) {
+                clear();
+                key = std::forward<Factory>(make)(want);
+                preset = want;
+            }
+            return *key;
+        }
+    };
 
     std::unique_ptr<SecretMemoryPages> secret_mem_;
     s_poly &sec_coeff_;
     poly &sec_key_q_;
     poly &sec_key_p_;
     mutable std::mutex access_mtx_;
+    int open_count_{0};
     deb::SecretKey &deb_sk_;
+    mutable DerivedKeyCache<deb::u64> direct_root_deb_sk_;
+    mutable DerivedKeyCache<deb::u32> deb_sk32_;
+    mutable DerivedKeyCache<deb::u32> direct_root_deb_sk32_;
 };
 
 class SecretKeyAccessScope {

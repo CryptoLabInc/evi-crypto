@@ -70,6 +70,10 @@ void Query::serializeTo(const Query &query, std::ostream &os) {
     detail::utils::serializeQueryTo(*query.impl_, os);
 }
 
+void Query::serializeTo(const Query &query, std::ostream &os, BTruncMode mode) {
+    detail::utils::serializeQueryTo(*query.impl_, os, mode);
+}
+
 void Query::serializeToString(const Query &query, std::string &out) {
     std::ostringstream oss(std::ios::binary);
     Query::serializeTo(query, oss);

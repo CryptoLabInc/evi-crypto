@@ -61,8 +61,8 @@ enum class EvalMode : uint8_t {
     SINGLE,
     /// @cond INTERNAL
     MMS,   // MM + shared-a
-    MM32,  // MM with IP2 (u32 coefficients)
-    MMS32, // MMS with IP2 (u32 coefficients)
+    MM32,  // MM variant used by the IP3 u32-native path
+    MMS32, // MMS variant used by the IP3 u32-native path
     /// @endcond
 };
 
@@ -156,6 +156,25 @@ enum class SealMode {
     /// @endcond
     AES_KEK,
     NONE,
+};
+
+/**
+ * @enum BTruncMode
+ * @brief Controls b-part truncation when serializing row-storage ciphertexts.
+ *
+ * Mirrors the analogous hem CTMatrix BTruncMode (CryptoLabInc/hem#644) so the
+ * two layers share a consistent shape. Semantics are intent-based: the wire
+ * format version is selected by the mode, not by whether `dim` happens to
+ * equal DEGREE at the call site.
+ *
+ * - NONE:  full-width b-part, V1 header. Same as legacy serializeTo(stream).
+ * - TRUNC: `dim`-length b-part, V2 header. b[dim..DEGREE) is zero-filled on
+ *          decode. Use for server-side row storage where b is in the
+ *          coefficient domain and the tail is zero-padding from the encoder.
+ */
+enum class BTruncMode : uint8_t {
+    NONE = 0,
+    TRUNC = 1,
 };
 
 } // namespace evi

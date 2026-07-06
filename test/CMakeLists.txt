@@ -54,6 +54,21 @@ endif()
 evi_add_test(SerializationRoundTripTest SerializationRoundTripTest.cpp
              utils.cpp)
 
+# EvisV1FixtureLoadTest reads ~35 MB of pre-refactor binary keys to verify
+# wire-format compat. The fixtures live in
+# gs://envector-qa/evi/fixtures/evis-v1/ (auth via GitHub OIDC -> WIF ->
+# evi-fixture-reader@es2-msa SA). Register the test only if the bundle has been
+# fetched: either crypto/test/fixtures/ evis-v1/v1/manifest.json exists (local
+# `fetch.sh` or CI workspace download) or $EVIS_V1_FIXTURE_DIR is set so the
+# test can find the bundle elsewhere.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/evis-v1/v1/manifest.json"
+   OR DEFINED ENV{EVIS_V1_FIXTURE_DIR})
+  evi_add_test(EvisV1FixtureLoadTest EvisV1FixtureLoadTest.cpp utils.cpp)
+else()
+  message(STATUS "EvisV1FixtureLoadTest skipped: fixtures not present "
+                 "(run crypto/test/fixtures/evis-v1/fetch.sh to enable).")
+endif()
+
 evi_add_test(SecurityTest SecurityTest.cpp)
 
 evi_add_test(EncodeTest EncodeTest.cpp)

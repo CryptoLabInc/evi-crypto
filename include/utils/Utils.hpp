@@ -34,7 +34,40 @@
 #include <openssl/buffer.h>
 #include <openssl/evp.h>
 
-#define getInnerRank(rank) (std::max(uint64_t(32), uint64_t(std::pow(2, std::floor(std::log2(rank) / 2)))))
+// Inner (per-ciphertext-block) rank for RMP/RMS packing: the floor-power-of-two
+// square root of the dimension, padded up to the next power of two FIRST.
+//
+// Why pad first: a message/dim of size D is laid out in a power-of-two-sized
+// container (nextPow2(D)), so the inner rank must be derived from that padded
+// size, not the raw D. Computing it on the raw D floors log2(D) one step too low
+// for D in the upper half between two even powers (e.g. D in (2048, 4096) gave
+// 32 instead of 64), which made the encrypt inner rank, the context padRank, and
+// the eval-key file naming disagree for non-power-of-two dimensions. Padding
+// first makes all three agree. For power-of-two D this is identical to the old
+// raw form, so power-of-two ranks (every previously-working config) are
+// unaffected; only non-power-of-two dims (which were already broken) change.
+//
+// Implemented with integer ops (no std::log2/std::pow rounding hazards) and kept
+// as a function-like macro so the call sites that sit inside ContextImpl methods
+// expand to a qualified call and are not shadowed by the 0-arg
+// ContextImpl::getInnerRank() member.
+namespace evi {
+namespace detail {
+namespace utils {
+inline uint64_t innerRankFromDim(uint64_t dim) {
+    uint64_t padded = 1; // nextPow2(dim): smallest power of two >= dim
+    unsigned k = 0;      // log2(padded)
+    while (padded < dim) {
+        padded <<= 1;
+        ++k;
+    }
+    uint64_t inner = uint64_t(1) << (k / 2); // 2^floor(log2(padded)/2)
+    return inner < 32 ? uint64_t(32) : inner;
+}
+} // namespace utils
+} // namespace detail
+} // namespace evi
+#define getInnerRank(rank) (evi::detail::utils::innerRankFromDim(static_cast<uint64_t>(rank)))
 
 namespace evi {
 namespace detail {
@@ -42,6 +75,8 @@ namespace utils {
 namespace fs = std::filesystem;
 
 void serializeQueryTo(const Query &query, std::ostream &os);
+// TRUNC truncates each CIPHER block's b-part to its populated count `n` (V3).
+void serializeQueryTo(const Query &query, std::ostream &os, evi::BTruncMode mode);
 Query deserializeQueryFrom(std::istream &is);
 
 void serializeResultTo(const SearchResult &res, std::ostream &os);
