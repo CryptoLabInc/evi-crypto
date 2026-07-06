@@ -22,8 +22,6 @@
 #include "utils/Utils.hpp"
 #include "utils/security/Security.hpp"
 
-#include <deb/SecretKeyGenerator.hpp>
-
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -234,14 +232,23 @@ SecretKeyData::~SecretKeyData() {
 
 void SecretKeyData::openAccess() {
     std::lock_guard<std::mutex> lock(access_mtx_);
-    secret_mem_->unprotect();
+    if (open_count_ == 0) {
+        secret_mem_->unprotect();
+    }
+    ++open_count_;
 }
 
 void SecretKeyData::closeAccess() noexcept {
     std::lock_guard<std::mutex> lock(access_mtx_);
-    try {
-        secret_mem_->protect();
-    } catch (...) {
+    if (open_count_ <= 0) {
+        return;
+    }
+
+    if (--open_count_ == 0) {
+        try {
+            secret_mem_->protect();
+        } catch (...) {
+        }
     }
 }
 
@@ -256,19 +263,46 @@ void SecretKeyData::reset() noexcept {
     evi::security::secureZeroMemory(sec_key_p_.data(), sizeof(sec_key_p_));
     evi::security::secureZeroMemory(deb_sk_.coeffs(), DEGREE * sizeof(int8_t));
     sec_loaded_ = false;
+    clearDerivedDebSecKeyCache();
     try {
         secret_mem_->protect();
     } catch (...) {
     }
 }
 
-namespace {
 bool hasBinExtension(const std::string &path) {
     static constexpr const char *K_EXT = ".bin";
     const std::size_t ext_len = 4;
     return path.size() >= ext_len && path.compare(path.size() - ext_len, ext_len, K_EXT) == 0;
 }
-} // namespace
+
+void SecretKeyData::clearDerivedDebSecKeyCache() const noexcept {
+    direct_root_deb_sk_.clear();
+    deb_sk32_.clear();
+    direct_root_deb_sk32_.clear();
+}
+
+const deb::SecretKey32 &SecretKeyData::getDirectRootDebSecKey32(deb::Preset preset) const {
+    std::lock_guard<std::mutex> lock(access_mtx_);
+    return direct_root_deb_sk32_.getOrBuild(preset, [this](deb::Preset p) {
+        return utils::makeDirectRootDebSecretKey<deb::u32>(p, deb_sk_);
+    });
+}
+
+const deb::SecretKey32 &SecretKeyData::getDebSecKey32(deb::Preset preset) const {
+    std::lock_guard<std::mutex> lock(access_mtx_);
+    // Default root, like genSecKey — same secret's u32 embedding for Encryptor/KeyGenerator.
+    return deb_sk32_.getOrBuild(preset, [this](deb::Preset p) {
+        return utils::makeDebSecretKey<deb::u32>(p, deb_sk_);
+    });
+}
+
+const deb::SecretKey &SecretKeyData::getDirectRootDebSecKey(deb::Preset preset) const {
+    std::lock_guard<std::mutex> lock(access_mtx_);
+    return direct_root_deb_sk_.getOrBuild(preset, [this](deb::Preset p) {
+        return utils::makeDirectRootDebSecretKey<deb::u64>(p, deb_sk_);
+    });
+}
 
 void SecretKeyData::loadSecKey(const std::string &dir_path) {
     if (hasBinExtension(dir_path)) {
@@ -286,6 +320,7 @@ void SecretKeyData::loadSecKey(const std::string &dir_path) {
 
 void SecretKeyData::loadSecKey(std::istream &in) {
     SecretKeyAccessScope scoped_access(*this);
+    clearDerivedDebSecKeyCache();
     in.read(reinterpret_cast<char *>(&sec_loaded_), sizeof(bool));
     if (sec_loaded_) {
         char preset_buf[4];
@@ -310,7 +345,7 @@ void SecretKeyData::loadSecKey(std::istream &in) {
             deb_sk_.coeffs()[i] = static_cast<int8_t>(sec_coeff_[i]);
         }
         auto deb_preset = utils::getDebPreset(preset_buf);
-        deb_sk_ = deb::SecretKeyGenerator::GenSecretKeyFromCoeff(deb_preset, deb_sk_.coeffs());
+        deb_sk_ = utils::makeDebSecretKey<deb::u64>(deb_preset, deb_sk_);
         std::memcpy(sec_key_q_.data(), deb_sk_[0][0].data(), detail::U64_DEGREE);
         std::memcpy(sec_key_p_.data(), deb_sk_[0][1].data(), detail::U64_DEGREE);
     } else {

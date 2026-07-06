@@ -33,6 +33,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <variant>
 #include <vector>
 
 // deb header
@@ -46,6 +47,14 @@ namespace fs = std::filesystem;
 namespace detail {
 
 class KeySwitcher;
+
+// Backward L0 key-switch storage routing: u32-native for IP3, u64 for all
+// other presets. After the IP2->u64 demotion this is exactly the invariant
+// isU32Matrix() <=> preset==ParameterPreset::IP3, so the former centralized
+// width predicate was collapsed away: sites with matrix context use
+// isU32Matrix(); key-gen / (de)serialize sites (param only) gate directly
+// on preset==ParameterPreset::IP3. NOT a prime-width gate (IP2's backward
+// primes also fit 32 bits, but IP2 is now u64-numeric).
 
 // Bitmask for selective eval key loading. Skipped components are read past but
 // not stored — this lets compute nodes load only the backward L0 keys without
@@ -106,6 +115,16 @@ public:
     void loadEvalKeyFile(const std::string &path, EvalKeyComponents components);
     void loadEvalKeyBuffer(std::istream &is, EvalKeyComponents components);
 
+    // Probe `is` to see whether its remaining payload is a multi-rank archive
+    // (utils::serializeEvalKey output) instead of a raw KeyPackData buffer.
+    // The stream position is restored before returning.
+    //
+    // Archive detection mirrors the file-path loader: either the first byte
+    // is 'D'/'F' (header-less), or a successful EVIS header read is followed
+    // by 'D'/'F'. Returning true means the caller should dispatch to the
+    // bundle-handling path; false means continue with raw deserialization.
+    static bool peekIsArchive(std::istream &is);
+
     void serialize(std::ostream &os) const;
     void deserialize(std::istream &is);
 
@@ -127,6 +146,11 @@ public:
     FixedKeyType enckey;
     VariadicKeyType relin_key;
     deb::SwitchKey deb_enc_key;
+    // u32-native enc key for u32-native presets (IP3). When engaged, `enckey`
+    // / `deb_enc_key` (u64) are left empty: the key lives only as u32, end to
+    // end (keygen -> serialize -> load -> encrypt). The packed wire format is
+    // byte-identical to the u64 path, so files stay interchangeable.
+    std::optional<deb::SwitchKey32> deb_enc_key32;
     deb::SwitchKey deb_relin_key;
 
     VariadicKeyType mod_pack_key;
@@ -134,21 +158,40 @@ public:
     VariadicKeyType cc_shared_a_mod_pack_key;
     VariadicKeyType switch_key;
     VariadicKeyType shared_a_key;
-    polyvec shared_a_key_r_a; // R-channel A-parts for QPR FmtSwitch
-    polyvec shared_a_key_r_b; // R-channel B-parts for QPR FmtSwitch
-    u64 r_prime_ = 0;         // R prime value for QPR modDown
     VariadicKeyType reverse_switch_key;
-    std::vector<VariadicKeyType> key_switching_key;
+    using TransposeKey32 = std::shared_ptr<Matrix<DataType::CIPHER, u32>>;
+    using TransposeKey = std::variant<VariadicKeyType, TransposeKey32>;
+    std::vector<TransposeKey> key_switching_key;
     std::vector<VariadicKeyType> additive_shared_a_key;
     deb::SwitchKey deb_mod_pack_key;
-    deb::SwitchKey deb_shared_a_fwd_key;                // legacy single key
-    deb::SwitchKey deb_shared_a_bwd_key;                // legacy single key
     std::vector<deb::SwitchKey> shared_a_fwd_keys;      // nss diagonal QPR keys (s→s_j)
     std::vector<deb::SwitchKey> shared_a_off_diag_keys; // nss*nss off-diagonal bx
 
-    // Backward L0 keys for post-PCMM key-switch (s_j → s), CRT-consistent
+    // Backward L0 keys for post-PCMM key-switch (s_j → s), CRT-consistent.
+    // One representation per key (variant); routing/rationale: u32 alternative
+    // for IP3, u64 for all others (preset==IP3 gate; the IP2->u64 demotion
+    // invariant isU32Matrix() <=> IP3). Producer emplaces only the active
+    // alternative (no dead second copy); wire format is identical for both
+    // widths (bit-packed at bitLength(prime)), so no version bump.
     struct BackwardL0Key {
-        polyvec ax_q, ax_p, bx_q, bx_p; // DEGREE each, NTT domain
+        // Each: DEGREE values, NTT domain. Exactly one alternative engaged.
+        using Poly = std::variant<polyvec, polyvec32>;
+        Poly ax_q, ax_p, bx_q, bx_p;
+
+        // Single width-generic accessor. polyvec_t<u64>==polyvec,
+        // polyvec_t<u32>==polyvec32, so std::get<polyvec_t<T>> selects the
+        // active alternative; it throws std::bad_variant_access on a wrong-T
+        // access (loud, vs. the old silent dual-residency bug). Both generic-T
+        // consumers (backward-KS) and width-explicit sites (KeyValidationTest's
+        // IP2->poly<u64> / IP3->poly<u32> checks) use this one accessor.
+        template <class T>
+        static polyvec_t<T> &poly(Poly &m) {
+            return std::get<polyvec_t<T>>(m);
+        }
+        template <class T>
+        static const polyvec_t<T> &poly(const Poly &m) {
+            return std::get<polyvec_t<T>>(m);
+        }
     };
     std::vector<BackwardL0Key> shared_a_bwd_l0_keys; // nss keys
 
@@ -165,6 +208,11 @@ public:
     std::shared_ptr<KeySwitcher> keyswitcher_gpu_;
 
 private:
+    // Bit-packs the 4 enc-key polys (ax_q, ax_p, bx_q, bx_p). Picks the u32
+    // (IP3, deb_enc_key32) or u64 (enckey) source; the packed wire is byte-
+    // identical for both widths. Shared by getEncKeyBuffer and serialize.
+    void writeEncKeyPacked(std::ostream &os, uint8_t q_bits, uint8_t p_bits) const;
+
     mutable std::mutex keyswitcher_mtx_;
 
     const evi::detail::Context context_;

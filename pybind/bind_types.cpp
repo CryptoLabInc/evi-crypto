@@ -117,6 +117,13 @@ void bind_types(py::module_ &m) {
                         const std::string &s = os.str();
                         return py::bytes(s.data(), s.size());
                     })
+        .def_static("serializeToTruncated",
+                    [](const Query &q) {
+                        std::ostringstream os(std::ios::binary);
+                        Query::serializeTo(q, os, evi::BTruncMode::TRUNC);
+                        const std::string &s = os.str();
+                        return py::bytes(s.data(), s.size());
+                    })
         .def_static("deserializeFrom", [](py::bytes b) {
             std::string s = b;
             std::istringstream is(s, std::ios::binary);

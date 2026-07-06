@@ -47,7 +47,7 @@ TEST(Context, NTTRoundTripQ) {
 
     std::vector<u64> poly(DEGREE, 0), original(DEGREE, 0);
     std::mt19937_64 rng(12345);
-    u64 mod_q = ctx->getParam()->getPrimeQ();
+    u64 mod_q = ctx->getParam()->getQ(0);
     for (size_t i = 0; i < DEGREE; ++i) {
         poly[i] = rng() % mod_q;
         original[i] = poly[i];
@@ -64,7 +64,7 @@ TEST(Context, NTTRoundTripP) {
 
     std::vector<u64> poly(DEGREE, 0), original(DEGREE, 0);
     std::mt19937_64 rng(67890);
-    u64 mod_p = ctx->getParam()->getPrimeP();
+    u64 mod_p = deb_prime_at(ctx->getParam(), 1);
     for (size_t i = 0; i < DEGREE; ++i) {
         poly[i] = rng() % mod_p;
         original[i] = poly[i];

@@ -66,7 +66,7 @@ public:
      * @brief Returns the number of items currently stored.
      * @return Item count.
      */
-    uint32_t getItemCount();
+    uint32_t getItemCount() const;
 
 private:
     std::shared_ptr<detail::SearchResult> impl_;

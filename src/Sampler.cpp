@@ -69,9 +69,9 @@ void RandomSampler::sampleZO(span<u64> res_q, std::optional<span<u64>> res_p) {
     for (u32 i = 0; i < DEGREE; i++) {
         b1 = getRandomBits(1);
         b2 = getRandomBits(1);
-        res_q[i] = sampleTernaryModU64(b1, b2, context_->getParam()->getPrimeQ());
+        res_q[i] = sampleTernaryModU64(b1, b2, context_->getParam()->getQ(0));
         if (res_p) {
-            res_p.value()[i] = sampleTernaryModU64(b1, b2, context_->getParam()->getPrimeP());
+            res_p.value()[i] = sampleTernaryModU64(b1, b2, deb_prime_at(context_->getParam(), 1));
         }
     }
 }
@@ -107,18 +107,18 @@ void RandomSampler::noSampleHWT(span<i64> res) {
 void RandomSampler::sampleGaussian(span<u64> res_q, std::optional<span<u64>> res_p) {
     for (u64 i = 0; i < DEGREE; i++) {
         i64 rnd = getCenteredBinomialError();
-        res_q[i] = addIfLTZeroU64(rnd, context_->getParam()->getPrimeQ());
+        res_q[i] = addIfLTZeroU64(rnd, context_->getParam()->getQ(0));
         if (res_p) {
-            res_p.value()[i] = addIfLTZeroU64(rnd, context_->getParam()->getPrimeP());
+            res_p.value()[i] = addIfLTZeroU64(rnd, deb_prime_at(context_->getParam(), 1));
         }
     }
 }
 
 void RandomSampler::sampleUniformModQ(span<u64> res) {
     for (int i = 0; i < DEGREE; i++) {
-        u64 bw = bitWidth(context_->getParam()->getPrimeQ());
+        u64 bw = bitWidth(context_->getParam()->getQ(0));
         res[i] = getRandomBits(bw);
-        if (res[i] >= context_->getParam()->getPrimeQ()) {
+        if (res[i] >= context_->getParam()->getQ(0)) {
             i--;
         }
     }
@@ -126,9 +126,9 @@ void RandomSampler::sampleUniformModQ(span<u64> res) {
 
 void RandomSampler::sampleUniformModP(span<u64> res) {
     for (int i = 0; i < DEGREE; i++) {
-        u64 bw = bitWidth(context_->getParam()->getPrimeP());
+        u64 bw = bitWidth(deb_prime_at(context_->getParam(), 1));
         res[i] = getRandomBits(bw);
-        if (res[i] >= context_->getParam()->getPrimeP()) {
+        if (res[i] >= deb_prime_at(context_->getParam(), 1)) {
             i--;
         }
     }

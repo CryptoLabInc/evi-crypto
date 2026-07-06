@@ -50,7 +50,7 @@ protected:
         test_pcmm_key_path = "tests_pcmm_keys/";
         auto evi_preset = evi::detail::setPreset(preset);
         std::cout << "Testing parameter : " << getParamToString(preset) << std::endl;
-        db_scale = static_cast<double>(evi_preset->getPrimeP());
+        db_scale = static_cast<double>(deb_prime_at(evi_preset.get(), 1));
     }
 
     static void TearDownTestCase() {
@@ -249,6 +249,94 @@ TEST_F(EnDecryptTest, MultiKeyGenSeDeserializeEnDecTest) {
     query = enc->encrypt(msg, evi::EncodeType::QUERY);
     dmsg = dec->decrypt(query, restored_sec);
     EXPECT_LE(maxError(dmsg, msg), MAX_ERROR);
+}
+
+// =============================================================================
+// RMP inner-rank / padRank dimension coverage (getInnerRank pad-first fix).
+//
+// The inner rank for RMP is derived from the dimension PADDED up to the next
+// power of two: inner = 2^floor(log2(nextPow2(dim))/2), floored at 32. Over the
+// supported range [MIN_CONTEXT_SIZE=32, MAX_CONTEXT_SIZE=4096] this is exactly
+// 32 for dim in [32, 2048] and 64 for dim in [2049, 4096] (64 reachable for the
+// whole upper band, not only at dim==4096). The eval-key file is named by
+// padRank, so before the fix dims in (2048, 4095] generated keys named EVIKeys64
+// but were loaded as EVIKeys32 -> FileNotFoundError on the bundle round-trip.
+// =============================================================================
+
+// Exhaustive over EVERY dimension in the supported range (context construction
+// only, no keygen) so no dimension is skipped: assert the context's padRank is
+// the pad-first inner rank. This is the cheap, complete guard on the fix.
+TEST_F(EnDecryptTest, RMP_PadRank_AllDims_PadFirstInnerRank) {
+    for (int dim = static_cast<int>(evi::MIN_CONTEXT_SIZE); dim <= static_cast<int>(evi::MAX_CONTEXT_SIZE); ++dim) {
+        Context context = makeContext(preset, device_type, dim, evi::EvalMode::RMP);
+        const uint32_t expected = (dim <= 2048) ? 32u : 64u;
+        ASSERT_EQ(context->getPadRank(), expected) << "padRank mismatch at dim=" << dim;
+    }
+}
+
+// Full keygen -> stream-serialize -> deserialize -> encrypt -> decrypt cycle
+// (the path that surfaced the EVIKeys<padRank> load mismatch) with the message
+// sized to `dim`, checking the decrypted max error across a dimension sweep that
+// covers every power of two, the 2048/2049 inner-rank transition, the
+// just-below-power-of-two edges, and dense samples spanning the whole range.
+// Flip kExhaustiveDimSweep to run the full cycle on EVERY integer dim (slow:
+// one keygen per dim).
+TEST_F(EnDecryptTest, RMP_StreamSeDe_EnDec_MaxError_DimSweep) {
+    constexpr bool kExhaustiveDimSweep = false;
+
+    std::vector<int> dims;
+    if (kExhaustiveDimSweep) {
+        for (int d = static_cast<int>(evi::MIN_CONTEXT_SIZE); d <= static_cast<int>(evi::MAX_CONTEXT_SIZE); ++d) {
+            dims.push_back(d);
+        }
+    } else {
+        dims = {32,   33,   63,   64,   100,  127,  128,  200,  255,  256,  400,  511,  512,  800, 1000,
+                1023, 1024, 1500, 2000, 2047, 2048, 2049, 2050, 2500, 3000, 3500, 4000, 4095, 4096};
+    }
+
+    for (int dim : dims) {
+        SCOPED_TRACE("dim=" + std::to_string(dim));
+        Context context = makeContext(preset, device_type, dim, evi::EvalMode::RMP);
+
+        // Sanity: padRank follows the pad-first inner rank for this dim.
+        ASSERT_EQ(context->getPadRank(), (dim <= 2048) ? 32u : 64u);
+
+        SealInfo s_info(evi::SealMode::NONE);
+        std::vector<Context> contexts = {context};
+        const std::string key_dir = "stream_key_dimsweep/";
+        MultiKeyGenerator keygen(contexts, key_dir, s_info);
+        std::ostringstream key_streams(std::ios::binary);
+        auto sec_key = keygen.generateKeys(key_streams);
+
+        KeyPack restored_pack = makeKeyPack(context);
+        SecretKey restored_sec = makeSecKey(context);
+        std::istringstream serialized_key(key_streams.str(), std::ios::binary);
+        // Before the fix this threw FileNotFoundError(".../dump/EVIKeys32.bin")
+        // for dim in (2048, 4095].
+        ASSERT_NO_THROW(utils::deserializeKeyFiles(serialized_key, restored_sec, restored_pack))
+            << "eval-key load failed at dim=" << dim;
+
+        Encryptor enc = makeEncryptor(context, restored_pack);
+        Decryptor dec = makeDecryptor(context);
+
+        // Use the established RMP idiom (cf. MultiKeyGenSeDeserializeEnDecTest /
+        // RMPQueryEncDecTest): a DEGREE-sized message with the first `dim` slots
+        // populated, compared via maxError. RMP packs/unpacks against the full
+        // DEGREE layout, so the decrypted vector aligns element-wise with this
+        // DEGREE-sized input; a `dim`-sized input does NOT round-trip to the same
+        // linear order (the decoded values land in different positions), which is
+        // a property of the packing, not a decryption error.
+        std::vector<float> msg(DEGREE, 0.0f);
+        randomFaces(msg.data(), -1, 1, 1, dim);
+
+        auto query = enc->encrypt(msg, evi::EncodeType::ITEM);
+        auto dmsg = dec->decrypt(query, restored_sec);
+        EXPECT_LE(maxError(dmsg, msg), MAX_ERROR) << "ITEM decrypt error too high at dim=" << dim;
+
+        query = enc->encrypt(msg, evi::EncodeType::QUERY);
+        dmsg = dec->decrypt(query, restored_sec);
+        EXPECT_LE(maxError(dmsg, msg), MAX_ERROR) << "QUERY decrypt error too high at dim=" << dim;
+    }
 }
 
 TEST_F(EnDecryptTest, DistinctSecretKeysAreGenerated) {
@@ -585,6 +673,152 @@ TEST_F(EnDecryptTest, IP3_MMS32_EncDecTest) {
     }
     std::cout << "[IP3_MMS32] max_error=" << max_error << std::endl;
     EXPECT_LE(max_error, MAX_ERROR);
+}
+
+// Regression (#703 follow-up): decrypting a fresh IP3 typed query directly --
+// without the serialize/deserialize round-trip the other IP3 tests perform --
+// used to throw InvalidAccessError; it must now succeed and match the round-trip.
+TEST_F(EnDecryptTest, IP3_MMS32_DirectDecryptNoRoundTrip) {
+    preset = evi::ParameterPreset::IP3;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::MMS32);
+    std::vector<Context> contexts = {context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string ip3_path = test_pcmm_key_path + "ip3_mms32_direct/";
+    fs::create_directories(ip3_path);
+    MultiKeyGenerator keygen(contexts, ip3_path, s_info);
+    keygen.generateKeys();
+
+    KeyPack pack = makeKeyPack(context, ip3_path + "EncKey.bin");
+    Encryptor enc = makeEncryptor(context);
+    Decryptor dec = makeDecryptor(context);
+
+    const int n = 4096;
+    // Fixed seed for reproducibility on CI failure ('IP3R' = direct-decrypt Regression).
+    constexpr unsigned K_SEED = 0x49503352u;
+    std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
+    }
+
+    auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
+    // Sanity: the fresh query really is in typed state (the condition the fix guards).
+    ASSERT_NE(queries[0].getTypedDataState(), nullptr);
+
+    // Direct decrypt of the typed query -- must NOT throw and must decode correctly.
+    Message dmsg_direct;
+    ASSERT_NO_THROW(dmsg_direct = dec->decrypt(queries[0], ip3_path + "SecKey.bin", std::nullopt));
+
+    // Reference: the validated serialize/deserialize round-trip path.
+    std::stringstream query_stream;
+    evi::detail::utils::serializeQueryTo(queries[0], query_stream);
+    evi::detail::Query loaded = evi::detail::utils::deserializeQueryFrom(query_stream);
+    const auto dmsg_ref = dec->decrypt(loaded, ip3_path + "SecKey.bin", std::nullopt);
+
+    // The internal flatten round-trips through the same serializer, so the direct
+    // path must equal the reference bit-for-bit across the full payload.
+    ASSERT_EQ(dmsg_direct.size(), dmsg_ref.size());
+    for (size_t i = 0; i < dmsg_ref.size(); ++i) {
+        ASSERT_EQ(dmsg_direct[i], dmsg_ref[i]) << "mismatch at index " << i;
+    }
+
+    float max_error = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        auto original = evi::span<float>(templates[i].data(), rank);
+        auto decoded = evi::span<float>(dmsg_direct.data() + i * rank, rank);
+        max_error = std::max(max_error, maxError(original, decoded));
+    }
+    std::cout << "[IP3_MMS32_Direct] max_error=" << max_error << std::endl;
+    EXPECT_LE(max_error, MAX_ERROR);
+}
+
+// Deserialize a query stream into u32-typed CIPHER blocks (SingleBlock<CIPHER,
+// u32>), so the decrypt path takes the u32-native branch (isU32()==true). This
+// mirrors deserializeQueryFrom's outer-stream framing exactly (header,
+// query_type, dtype, size) but materializes u32 blocks instead of the default
+// u64 ones — letting us decrypt the SAME wire bytes both ways for a bit-equality
+// differential.
+static evi::detail::Query deserializeQueryAsU32(std::istream &is) {
+    namespace ser = evi::detail::serialization;
+    auto header = ser::readHeader(is);
+    if (header.has_header && header.version != ser::kVersionV1) {
+        throw evi::NotSupportedError("Unsupported query serialization version");
+    }
+    uint8_t query_type_raw = 0;
+    is.read(reinterpret_cast<char *>(&query_type_raw), sizeof(query_type_raw));
+    if (query_type_raw != static_cast<uint8_t>(evi::QueryType::SINGLE)) {
+        throw evi::NotSupportedError("u32 differential helper supports only SINGLE queries");
+    }
+    evi::DataType t;
+    is.read(reinterpret_cast<char *>(&t), 1);
+    if (t != evi::DataType::CIPHER) {
+        throw evi::NotSupportedError("u32 differential helper supports only CIPHER blocks");
+    }
+    u32 size = 0;
+    is.read(reinterpret_cast<char *>(&size), sizeof(u32));
+    evi::detail::Query res;
+    for (u32 i = 0; i < size; ++i) {
+        res.emplace_back(std::make_shared<evi::detail::SingleBlock<evi::DataType::CIPHER, u32>>(is));
+    }
+    return res;
+}
+
+// #703 differential: ONE fixed-seed IP3 ciphertext, decrypted via BOTH the
+// u32-native path (production: SingleBlock<CIPHER,u32>, isU32()==true ->
+// debDecryptor32) and the u64-widen path (deserializeQueryFrom ->
+// SingleBlock<CIPHER,u64>, isU32()==false -> debDecryptor). Both decode the same
+// (a,b) coefficients mod the same prime, so the decoded plaintext must be
+// element-wise BIT-IDENTICAL — not merely within a recall/max_err bound. Guards
+// against a u32 path that silently diverges from the validated u64 reference.
+TEST_F(EnDecryptTest, IP3_U32_vs_U64_Decrypt_BitEqual) {
+    preset = evi::ParameterPreset::IP3;
+    Context context = makeContext(preset, device_type, rank, evi::EvalMode::MM32);
+    std::vector<Context> contexts = {context};
+    SealInfo s_info = SealInfo(evi::SealMode::NONE);
+    const std::string ip3_path = test_pcmm_key_path + "ip3_u32_vs_u64/";
+    fs::create_directories(ip3_path);
+    MultiKeyGenerator keygen(contexts, ip3_path, s_info);
+    keygen.generateKeys();
+
+    KeyPack pack = makeKeyPack(context, ip3_path + "EncKey.bin");
+    Encryptor enc = makeEncryptor(context);
+    Decryptor dec = makeDecryptor(context);
+
+    const int n = 4096;
+    // Fixed seed for reproducibility on CI failure ('IP3D' = u32-vs-u64 Diff).
+    constexpr unsigned K_SEED = 0x49503344u;
+    std::vector<std::vector<float>> templates(n, std::vector<float>(rank, 0.0f));
+    for (int i = 0; i < n; ++i) {
+        randomFaces(templates[i].data(), -1, 1, 1, rank, K_SEED + i);
+    }
+
+    auto queries = enc->encrypt(templates, pack, evi::EncodeType::QUERY, /*level=*/1, std::nullopt);
+    EXPECT_EQ(queries[0].front()->getLevel(), 1);
+
+    // Serialize the IP3 ciphertext ONCE; decode the identical bytes two ways.
+    std::stringstream query_stream;
+    evi::detail::utils::serializeQueryTo(queries[0], query_stream);
+    const std::string wire = query_stream.str();
+
+    std::stringstream u64_stream(wire);
+    evi::detail::Query u64_query = evi::detail::utils::deserializeQueryFrom(u64_stream);
+
+    std::stringstream u32_stream(wire);
+    evi::detail::Query u32_query = deserializeQueryAsU32(u32_stream);
+
+    // Sanity: the two materializations really exercise the two decrypt branches.
+    ASSERT_FALSE(u64_query[0]->isU32());
+    ASSERT_TRUE(u32_query[0]->isU32());
+
+    const auto dmsg_u64 = dec->decrypt(u64_query, ip3_path + "SecKey.bin", std::nullopt);
+    const auto dmsg_u32 = dec->decrypt(u32_query, ip3_path + "SecKey.bin", std::nullopt);
+
+    // Bit-exact equality (zero tolerance) across the full decoded payload: both
+    // paths run the same static_cast<float>(coeff) on identical integer
+    // coefficients, so any difference means the u32 path diverged.
+    ASSERT_EQ(dmsg_u64.size(), dmsg_u32.size());
+    for (size_t i = 0; i < dmsg_u64.size(); ++i) {
+        EXPECT_EQ(dmsg_u32[i], dmsg_u64[i]) << "u32/u64 decrypt mismatch at index " << i;
+    }
 }
 
 // =============================================================================

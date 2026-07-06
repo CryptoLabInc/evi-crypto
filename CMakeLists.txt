@@ -43,6 +43,8 @@ option(BUILD_WITH_VALGRIND
        "Build using Valgrind to check constant-time sampler" OFF)
 option(BUILD_WITH_CUDA "Build with CUDA acceleration" OFF)
 option(BUILD_AS_STATIC "Build library as static" ON)
+option(EVI_DISABLE_X86_AVX
+       "Build x86 code without AVX/FMA/AVX-512 instructions" OFF)
 option(USE_PROFILE "Activate Perfetto profiler" OFF)
 option(BUILD_PYTHON "Build Python bindings" OFF)
 option(BUILD_C_API "Build C language wrapper API" OFF)
@@ -114,6 +116,21 @@ if(BUILD_PYTHON)
   endif()
 endif()
 
+if(EVI_DISABLE_X86_AVX)
+  set(_EVI_X86_NO_AVX_FLAGS
+      -mno-avx
+      -mno-avx2
+      -mno-fma
+      -mno-avx512f
+      -mno-avx512dq
+      -mno-avx512vl
+      -mno-avx512bw
+      -mno-avx512cd)
+  foreach(_evi_no_avx_flag IN LISTS _EVI_X86_NO_AVX_FLAGS)
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:${_evi_no_avx_flag}>)
+  endforeach()
+endif()
+
 message(STATUS "BUILD_TEST=${BUILD_TEST}")
 message(STATUS "BUILD_EXAMPLE=${BUILD_EXAMPLE}")
 message(STATUS "BUILD_KEY_MANAGEMENT=${BUILD_KEY_MANAGEMENT}")
@@ -122,6 +139,7 @@ message(STATUS "USE_PROFILE=${USE_PROFILE}")
 message(STATUS "BUILD_PYTHON=${BUILD_PYTHON}")
 message(STATUS "BUILD_C_API=${BUILD_C_API}")
 message(STATUS "BUILD_WITH_CUDA=${BUILD_WITH_CUDA}")
+message(STATUS "EVI_DISABLE_X86_AVX=${EVI_DISABLE_X86_AVX}")
 message(STATUS "HEM_BUILD_FOR_CLIENT=${HEM_BUILD_FOR_CLIENT}")
 message(STATUS "EVI_KM_PREFER_AWS_SDK=${EVI_KM_PREFER_AWS_SDK}")
 message(STATUS "EVI_KM_PREFER_GCP_SDK=${EVI_KM_PREFER_GCP_SDK}")
@@ -262,7 +280,14 @@ if(WIN32)
 endif()
 message(STATUS "OpenSSL crypto library: ${OPENSSL_CRYPTO_LIBRARY}")
 
-list(APPEND EXTERNAL_LIBS deb alea flatbuffers OpenSSL::Crypto)
+list(
+  APPEND
+  EXTERNAL_LIBS
+  deb
+  alea
+  flatbuffers
+  OpenSSL::Crypto
+  heaan::ntt)
 if(BUILD_KEY_MANAGEMENT)
   list(APPEND EXTERNAL_LIBS OpenSSL::SSL)
 endif()

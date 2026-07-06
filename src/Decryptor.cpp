@@ -19,6 +19,11 @@
 #include "EVI/Decryptor.hpp"
 #include "EVI/impl/DecryptorImpl.hpp"
 
+#include <optional>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
+
 namespace evi {
 
 Decryptor::Decryptor(std::shared_ptr<detail::Decryptor> impl) noexcept : impl_(std::move(impl)) {}
@@ -56,6 +61,14 @@ Message Decryptor::decrypt(const Query &ctxt, std::istream &key_stream, std::opt
 
 Message Decryptor::decrypt(int idx, const Query &ctxt, const SecretKey &key, std::optional<double> scale) {
     return Message(std::make_shared<detail::Message>((*impl_)->decrypt(idx, *getImpl(ctxt), *getImpl(key), scale)));
+}
+
+std::vector<std::tuple<int, int, float>>
+Decryptor::decryptBatchTopKParallel(const char *const *shard_blobs, const std::size_t *shard_blob_lens,
+                                    std::size_t shard_count, const char *key_blob, std::size_t key_blob_len, int k,
+                                    std::optional<double> scale, int n_jobs) {
+    return (*impl_)->decryptBatchTopKParallel(shard_blobs, shard_blob_lens, shard_count, key_blob, key_blob_len, k,
+                                              scale, n_jobs);
 }
 
 Decryptor makeDecryptor(const Context &context) {

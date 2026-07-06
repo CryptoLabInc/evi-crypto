@@ -27,9 +27,11 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <type_traits>
 #include <vector>
 
 using json = nlohmann::json;
@@ -37,12 +39,52 @@ using json = nlohmann::json;
 namespace evi {
 namespace detail {
 
+// Backward L0 key u32/u64 routing is preset==IP3 (the IP2->u64 demotion
+// invariant: u32 storage <=> IP3). Do not add a file-local width-based
+// helper; gate on preset==IP3 (read-side) or std::visit the stored variant
+// (write-side).
+
+// Reads one transpose (key-switching) key into an already-sized
+// Matrix<CIPHER, T>. The caller decides T via the preset==IP3 gate (u32) or
+// u64 default and then dispatches here; this helper only performs the width-
+// parameterized populate, so it does not itself route on width. The header
+// (bit-packed) path is identical for u32/u64 apart from T; only the legacy
+// (pre-header) wire — which is always u64-on-disk — differs and is selected
+// via if constexpr (raw read for u64, widen-copy for u32).
+template <class T>
+void readTransposeKeyInto(std::istream &is, Matrix<DataType::CIPHER, T> &key, bool has_header, deb::Size gadget_rank,
+                          deb::Size num_p, const std::vector<uint8_t> &p_bits_list, std::size_t poly_count) {
+    if (has_header) {
+        for (deb::Size gi = 0; gi < gadget_rank; ++gi) {
+            for (deb::Size pj = 0; pj < num_p; ++pj) {
+                const std::size_t idx = (gi * num_p + pj) * DEGREE;
+                const uint8_t bits = p_bits_list[pj];
+                serialization::readPacked<T>(is, key.getPolyData(1, 0) + idx, DEGREE, bits);
+                serialization::readPacked<T>(is, key.getPolyData(0, 0) + idx, DEGREE, bits);
+            }
+        }
+    } else if constexpr (std::is_same_v<T, u64>) {
+        is.read(reinterpret_cast<char *>(key.getPolyData(1, 0)), U64_DEGREE * poly_count);
+        is.read(reinterpret_cast<char *>(key.getPolyData(0, 0)), U64_DEGREE * poly_count);
+    } else {
+        // Legacy wire stores u64; widen each DEGREE poly into the u32 key.
+        std::vector<u64> scratch(DEGREE);
+        for (deb::Size gi = 0; gi < gadget_rank; ++gi) {
+            for (deb::Size pj = 0; pj < num_p; ++pj) {
+                const std::size_t idx = (gi * num_p + pj) * DEGREE;
+                is.read(reinterpret_cast<char *>(scratch.data()), U64_DEGREE);
+                std::copy_n(scratch.data(), DEGREE, key.getPolyData(1, 0) + idx);
+                is.read(reinterpret_cast<char *>(scratch.data()), U64_DEGREE);
+                std::copy_n(scratch.data(), DEGREE, key.getPolyData(0, 0) + idx);
+            }
+        }
+    }
+}
+
 KeyPackData::KeyPackData(const Context &context)
     : context_(context), deb_enc_key(utils::getDebPreset(context), deb::SWK_ENC),
       deb_relin_key(utils::getDebPreset(context), deb::SWK_MULT),
-      deb_mod_pack_key(utils::getDebPreset(context), deb::SWK_MODPACK_SELF),
-      deb_shared_a_fwd_key(utils::getDebPreset(context), deb::SWK_GENERIC),
-      deb_shared_a_bwd_key(utils::getDebPreset(context), deb::SWK_GENERIC) {
+      deb_mod_pack_key(utils::getDebPreset(context), deb::SWK_MODPACK_SELF) {
     const std::size_t relin_ax_poly_count = static_cast<std::size_t>(utils::getDebGadgetRank(context));
     const auto preset = utils::getDebPreset(context);
     const std::size_t relin_bx_poly_count = relin_ax_poly_count * static_cast<std::size_t>(deb::get_num_secret(preset));
@@ -91,16 +133,31 @@ void KeyPackData::getEncKeyBuffer(std::ostream &os) const {
     os.write(&byte, sizeof(byte));
     os.write(preset_str.data(), preset_str.size());
     serialization::writeHeader(os, serialization::kVersionV1);
-    const uint8_t q_bits = serialization::bitLengthU64(context_->getParam()->getPrimeQ());
-    const uint8_t p_bits = serialization::bitLengthU64(context_->getParam()->getPrimeP());
+    const uint8_t q_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 0));
+    const uint8_t p_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 1));
     os.write(reinterpret_cast<const char *>(&q_bits), sizeof(q_bits));
     os.write(reinterpret_cast<const char *>(&p_bits), sizeof(p_bits));
     // TODO: replace below with the following deb serialize function
     // deb::serializeToStream(deb_enc_key, os);
-    serialization::writePackedU64(os, enckey->getPolyData(1, 0), DEGREE, q_bits);
-    serialization::writePackedU64(os, enckey->getPolyData(1, 1), DEGREE, p_bits);
-    serialization::writePackedU64(os, enckey->getPolyData(0, 0), DEGREE, q_bits);
-    serialization::writePackedU64(os, enckey->getPolyData(0, 1), DEGREE, p_bits);
+    writeEncKeyPacked(os, q_bits, p_bits);
+}
+
+void KeyPackData::writeEncKeyPacked(std::ostream &os, uint8_t q_bits, uint8_t p_bits) const {
+    if (deb_enc_key32) {
+        // u32-native (IP3): pack straight from the u32 key. writePacked<u32>
+        // emits the same bytes as writePacked<u64> for these widths, so the
+        // file is interchangeable with the u64 path.
+        auto &k = *deb_enc_key32;
+        serialization::writePacked<u32>(os, k.ax(0)[0].data(), DEGREE, q_bits);
+        serialization::writePacked<u32>(os, k.ax(0)[1].data(), DEGREE, p_bits);
+        serialization::writePacked<u32>(os, k.bx(0)[0].data(), DEGREE, q_bits);
+        serialization::writePacked<u32>(os, k.bx(0)[1].data(), DEGREE, p_bits);
+        return;
+    }
+    serialization::writePacked<u64>(os, enckey->getPolyData(1, 0), DEGREE, q_bits);
+    serialization::writePacked<u64>(os, enckey->getPolyData(1, 1), DEGREE, p_bits);
+    serialization::writePacked<u64>(os, enckey->getPolyData(0, 0), DEGREE, q_bits);
+    serialization::writePacked<u64>(os, enckey->getPolyData(0, 1), DEGREE, p_bits);
 }
 
 void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
@@ -114,27 +171,27 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
     char byte = 0x03;
     out.write(&byte, sizeof(byte));
     serialization::writeHeader(out, serialization::kVersionV1);
-    const uint8_t q_bits = serialization::bitLengthU64(context_->getParam()->getPrimeQ());
-    const uint8_t p_bits = serialization::bitLengthU64(context_->getParam()->getPrimeP());
+    const uint8_t q_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 0));
+    const uint8_t p_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 1));
     out.write(reinterpret_cast<const char *>(&q_bits), sizeof(q_bits));
     out.write(reinterpret_cast<const char *>(&p_bits), sizeof(p_bits));
     // preset, dim, eval
     if (context_->getEvalMode() == EvalMode::SINGLE) {
-        serialization::writePackedU64(out, relin_key->getPolyData(1, 0), DEGREE, q_bits);
-        serialization::writePackedU64(out, relin_key->getPolyData(1, 1), DEGREE, p_bits);
-        serialization::writePackedU64(out, relin_key->getPolyData(0, 0), DEGREE, q_bits);
-        serialization::writePackedU64(out, relin_key->getPolyData(0, 1), DEGREE, p_bits);
+        serialization::writePacked<u64>(out, relin_key->getPolyData(1, 0), DEGREE, q_bits);
+        serialization::writePacked<u64>(out, relin_key->getPolyData(1, 1), DEGREE, p_bits);
+        serialization::writePacked<u64>(out, relin_key->getPolyData(0, 0), DEGREE, q_bits);
+        serialization::writePacked<u64>(out, relin_key->getPolyData(0, 1), DEGREE, p_bits);
 
     } else if (!CHECK_MM(context_->getEvalMode())) {
-        serialization::writePackedU64(out, relin_key->getPolyData(1, 0), DEGREE, q_bits);
-        serialization::writePackedU64(out, relin_key->getPolyData(1, 1), DEGREE, p_bits);
-        serialization::writePackedU64(out, relin_key->getPolyData(0, 0), DEGREE, q_bits);
-        serialization::writePackedU64(out, relin_key->getPolyData(0, 1), DEGREE, p_bits);
+        serialization::writePacked<u64>(out, relin_key->getPolyData(1, 0), DEGREE, q_bits);
+        serialization::writePacked<u64>(out, relin_key->getPolyData(1, 1), DEGREE, p_bits);
+        serialization::writePacked<u64>(out, relin_key->getPolyData(0, 0), DEGREE, q_bits);
+        serialization::writePacked<u64>(out, relin_key->getPolyData(0, 1), DEGREE, p_bits);
         const std::size_t count = static_cast<std::size_t>(DEGREE) * context_->getPadRank();
-        serialization::writePackedU64(out, mod_pack_key->getPolyData(1, 0), count, q_bits);
-        serialization::writePackedU64(out, mod_pack_key->getPolyData(1, 1), count, p_bits);
-        serialization::writePackedU64(out, mod_pack_key->getPolyData(0, 0), count, q_bits);
-        serialization::writePackedU64(out, mod_pack_key->getPolyData(0, 1), count, p_bits);
+        serialization::writePacked<u64>(out, mod_pack_key->getPolyData(1, 0), count, q_bits);
+        serialization::writePacked<u64>(out, mod_pack_key->getPolyData(1, 1), count, p_bits);
+        serialization::writePacked<u64>(out, mod_pack_key->getPolyData(0, 0), count, q_bits);
+        serialization::writePacked<u64>(out, mod_pack_key->getPolyData(0, 1), count, p_bits);
     } else {
         const auto num_p = utils::getDebNumP(context_);
         const auto gadget_rank = utils::getDebGadgetRank(context_);
@@ -150,15 +207,22 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
 
         for (int i = 0; i < key_switching_key.size(); i++) {
             auto &key = key_switching_key[i];
-            key->setSize(DEGREE * poly_count);
-            for (deb::Size gi = 0; gi < gadget_rank; ++gi) {
-                for (deb::Size pj = 0; pj < num_p; ++pj) {
-                    const std::size_t idx = (gi * num_p + pj) * DEGREE;
-                    const uint8_t bits = p_bits_list[pj];
-                    serialization::writePackedU64(out, key->getPolyData(1, 0) + idx, DEGREE, bits);
-                    serialization::writePackedU64(out, key->getPolyData(0, 0) + idx, DEGREE, bits);
-                }
-            }
+            std::visit(
+                [&](const auto &typed_key) {
+                    using Ptr = std::decay_t<decltype(typed_key)>;
+                    using Value = std::conditional_t<std::is_same_v<Ptr, KeyPackData::TransposeKey32>, u32, u64>;
+                    const auto *a_q = typed_key->getPolyData(1, 0);
+                    const auto *b_q = typed_key->getPolyData(0, 0);
+                    for (deb::Size gi = 0; gi < gadget_rank; ++gi) {
+                        for (deb::Size pj = 0; pj < num_p; ++pj) {
+                            const std::size_t idx = (gi * num_p + pj) * DEGREE;
+                            const uint8_t bits = p_bits_list[pj];
+                            serialization::writePacked<Value>(out, a_q + idx, DEGREE, bits);
+                            serialization::writePacked<Value>(out, b_q + idx, DEGREE, bits);
+                        }
+                    }
+                },
+                key);
         }
         // MMS: store num_shared_secret + key flags + shared-A keys after switching keys
         const int32_t nss = num_shared_secret;
@@ -183,37 +247,33 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
                 const uint32_t bwd_count = static_cast<uint32_t>(nss);
                 out.write(reinterpret_cast<const char *>(&bwd_count), sizeof(bwd_count));
                 const std::size_t count = static_cast<std::size_t>(nss) * DEGREE;
-                serialization::writePackedU64(out, shared_a_mod_pack_key->getPolyData(1, 0), count, q_bits);
-                serialization::writePackedU64(out, shared_a_mod_pack_key->getPolyData(1, 1), count, p_bits);
-                serialization::writePackedU64(out, shared_a_mod_pack_key->getPolyData(0, 0), count, q_bits);
-                serialization::writePackedU64(out, shared_a_mod_pack_key->getPolyData(0, 1), count, p_bits);
+                serialization::writePacked<u64>(out, shared_a_mod_pack_key->getPolyData(1, 0), count, q_bits);
+                serialization::writePacked<u64>(out, shared_a_mod_pack_key->getPolyData(1, 1), count, p_bits);
+                serialization::writePacked<u64>(out, shared_a_mod_pack_key->getPolyData(0, 0), count, q_bits);
+                serialization::writePacked<u64>(out, shared_a_mod_pack_key->getPolyData(0, 1), count, p_bits);
             }
             if (key_flags & 0x02) {
                 const std::size_t sa_count = static_cast<std::size_t>(nss) * DEGREE;
-                serialization::writePackedU64(out, cc_shared_a_mod_pack_key->getPolyData(1, 0), sa_count, q_bits);
-                serialization::writePackedU64(out, cc_shared_a_mod_pack_key->getPolyData(1, 1), sa_count, p_bits);
-                serialization::writePackedU64(out, cc_shared_a_mod_pack_key->getPolyData(0, 0), sa_count, q_bits);
-                serialization::writePackedU64(out, cc_shared_a_mod_pack_key->getPolyData(0, 1), sa_count, p_bits);
+                serialization::writePacked<u64>(out, cc_shared_a_mod_pack_key->getPolyData(1, 0), sa_count, q_bits);
+                serialization::writePacked<u64>(out, cc_shared_a_mod_pack_key->getPolyData(1, 1), sa_count, p_bits);
+                serialization::writePacked<u64>(out, cc_shared_a_mod_pack_key->getPolyData(0, 0), sa_count, q_bits);
+                serialization::writePacked<u64>(out, cc_shared_a_mod_pack_key->getPolyData(0, 1), sa_count, p_bits);
             }
             if (key_flags & 0x04) {
                 // Legacy forward conversion key (RMS format)
                 const std::size_t fwd_b = static_cast<std::size_t>(nss) * nss * DEGREE;
                 const std::size_t fwd_a = static_cast<std::size_t>(nss) * DEGREE;
-                serialization::writePackedU64(out, shared_a_key->getPolyData(0, 0), fwd_b, q_bits);
-                serialization::writePackedU64(out, shared_a_key->getPolyData(0, 1), fwd_b, p_bits);
-                serialization::writePackedU64(out, shared_a_key->getPolyData(1, 0), fwd_a, q_bits);
-                serialization::writePackedU64(out, shared_a_key->getPolyData(1, 1), fwd_a, p_bits);
+                serialization::writePacked<u64>(out, shared_a_key->getPolyData(0, 0), fwd_b, q_bits);
+                serialization::writePacked<u64>(out, shared_a_key->getPolyData(0, 1), fwd_b, p_bits);
+                serialization::writePacked<u64>(out, shared_a_key->getPolyData(1, 0), fwd_a, q_bits);
+                serialization::writePacked<u64>(out, shared_a_key->getPolyData(1, 1), fwd_a, p_bits);
 
-                // QPR: R-channel data for forward key
-                const uint8_t has_r = shared_a_key_r_a.empty() ? 0 : 1;
+                // Reserved gating byte for the deprecated QPR R-channel
+                // payload. Must remain written as 0 so older readers that
+                // still consume this byte advance the stream correctly and
+                // skip the (now absent) R-channel section.
+                const uint8_t has_r = 0;
                 out.write(reinterpret_cast<const char *>(&has_r), sizeof(has_r));
-                if (has_r) {
-                    out.write(reinterpret_cast<const char *>(&r_prime_), sizeof(r_prime_));
-                    const uint8_t r_bits = serialization::bitLengthU64(r_prime_);
-                    out.write(reinterpret_cast<const char *>(&r_bits), sizeof(r_bits));
-                    serialization::writePackedU64(out, shared_a_key_r_a.data(), fwd_a, r_bits);
-                    serialization::writePackedU64(out, shared_a_key_r_b.data(), fwd_b, r_bits);
-                }
             }
             // MMS deb QPR forward keys (independent of legacy flag 0x04)
             {
@@ -228,8 +288,10 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
                         for (deb::Size d = 0; d < deb_gr; ++d) {
                             for (deb::Size p = 0; p < deb_np; ++p) {
                                 const uint8_t bits = serialization::bitLengthU64(deb_p[p]);
-                                serialization::writePackedU64(out, shared_a_fwd_keys[s].ax(d)[p].data(), DEGREE, bits);
-                                serialization::writePackedU64(out, shared_a_fwd_keys[s].bx(d)[p].data(), DEGREE, bits);
+                                serialization::writePacked<u64>(out, shared_a_fwd_keys[s].ax(d)[p].data(), DEGREE,
+                                                                bits);
+                                serialization::writePacked<u64>(out, shared_a_fwd_keys[s].bx(d)[p].data(), DEGREE,
+                                                                bits);
                             }
                         }
                     }
@@ -238,8 +300,8 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
                         for (deb::Size d = 0; d < deb_gr; ++d) {
                             for (deb::Size p = 0; p < deb_np; ++p) {
                                 const uint8_t bits = serialization::bitLengthU64(deb_p[p]);
-                                serialization::writePackedU64(out, shared_a_off_diag_keys[idx].bx(d)[p].data(), DEGREE,
-                                                              bits);
+                                serialization::writePacked<u64>(out, shared_a_off_diag_keys[idx].bx(d)[p].data(),
+                                                                DEGREE, bits);
                             }
                         }
                     }
@@ -251,11 +313,26 @@ void KeyPackData::getEvalKeyBuffer(std::ostream &out) const {
                     // would silently truncate.
                     const uint8_t bwd_q_bits = serialization::bitLengthU64(context_->getParam()->getBackwardKeyQ());
                     const uint8_t bwd_p_bits = serialization::bitLengthU64(context_->getParam()->getBackwardKeyP());
+                    // IP3 -> u32 alternative, others -> u64. Bit-packed
+                    // payload is byte-identical (same width), no version bump.
+                    // Branch-free: std::visit dispatches on the variant's
+                    // active alternative (polyvec=u64 / polyvec32=u32) and
+                    // writePacked<T> deduces T. Wire bytes are byte-identical
+                    // to the explicit u32/u64 branch (same data ptr, DEGREE,
+                    // and preset-driven bit width).
                     for (int j = 0; j < nss; ++j) {
-                        serialization::writePackedU64(out, shared_a_bwd_l0_keys[j].ax_q.data(), DEGREE, bwd_q_bits);
-                        serialization::writePackedU64(out, shared_a_bwd_l0_keys[j].ax_p.data(), DEGREE, bwd_p_bits);
-                        serialization::writePackedU64(out, shared_a_bwd_l0_keys[j].bx_q.data(), DEGREE, bwd_q_bits);
-                        serialization::writePackedU64(out, shared_a_bwd_l0_keys[j].bx_p.data(), DEGREE, bwd_p_bits);
+                        const auto &bk = shared_a_bwd_l0_keys[j];
+                        auto packF = [&](const auto &field, uint8_t bits) {
+                            std::visit(
+                                [&](const auto &v) {
+                                    serialization::writePacked(out, v.data(), DEGREE, bits);
+                                },
+                                field);
+                        };
+                        packF(bk.ax_q, bwd_q_bits);
+                        packF(bk.ax_p, bwd_p_bits);
+                        packF(bk.bx_q, bwd_q_bits);
+                        packF(bk.bx_p, bwd_p_bits);
                     }
                 }
             }
@@ -271,15 +348,15 @@ void KeyPackData::getModPackKeyBuffer(std::ostream &out) const {
     // deb::serializeToStream(deb_mod_pack_key, out);
     out.write(reinterpret_cast<const char *>(&eval_loaded_), sizeof(bool));
     serialization::writeHeader(out, serialization::kVersionV1);
-    const uint8_t q_bits = serialization::bitLengthU64(context_->getParam()->getPrimeQ());
-    const uint8_t p_bits = serialization::bitLengthU64(context_->getParam()->getPrimeP());
+    const uint8_t q_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 0));
+    const uint8_t p_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 1));
     out.write(reinterpret_cast<const char *>(&q_bits), sizeof(q_bits));
     out.write(reinterpret_cast<const char *>(&p_bits), sizeof(p_bits));
     const std::size_t count = static_cast<std::size_t>(DEGREE) * context_->getPadRank();
-    serialization::writePackedU64(out, mod_pack_key->getPolyData(1, 0), count, q_bits);
-    serialization::writePackedU64(out, mod_pack_key->getPolyData(1, 1), count, p_bits);
-    serialization::writePackedU64(out, mod_pack_key->getPolyData(0, 0), count, q_bits);
-    serialization::writePackedU64(out, mod_pack_key->getPolyData(0, 1), count, p_bits);
+    serialization::writePacked<u64>(out, mod_pack_key->getPolyData(1, 0), count, q_bits);
+    serialization::writePacked<u64>(out, mod_pack_key->getPolyData(1, 1), count, p_bits);
+    serialization::writePacked<u64>(out, mod_pack_key->getPolyData(0, 0), count, q_bits);
+    serialization::writePacked<u64>(out, mod_pack_key->getPolyData(0, 1), count, p_bits);
 }
 
 void KeyPackData::getRelinKeyBuffer(std::ostream &out) const {
@@ -291,14 +368,14 @@ void KeyPackData::getRelinKeyBuffer(std::ostream &out) const {
     // deb::serializeToStream(deb_relin_key, out);
     out.write(reinterpret_cast<const char *>(&eval_loaded_), sizeof(bool));
     serialization::writeHeader(out, serialization::kVersionV1);
-    const uint8_t q_bits = serialization::bitLengthU64(context_->getParam()->getPrimeQ());
-    const uint8_t p_bits = serialization::bitLengthU64(context_->getParam()->getPrimeP());
+    const uint8_t q_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 0));
+    const uint8_t p_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 1));
     out.write(reinterpret_cast<const char *>(&q_bits), sizeof(q_bits));
     out.write(reinterpret_cast<const char *>(&p_bits), sizeof(p_bits));
-    serialization::writePackedU64(out, relin_key->getPolyData(1, 0), DEGREE, q_bits);
-    serialization::writePackedU64(out, relin_key->getPolyData(1, 1), DEGREE, p_bits);
-    serialization::writePackedU64(out, relin_key->getPolyData(0, 0), DEGREE, q_bits);
-    serialization::writePackedU64(out, relin_key->getPolyData(0, 1), DEGREE, p_bits);
+    serialization::writePacked<u64>(out, relin_key->getPolyData(1, 0), DEGREE, q_bits);
+    serialization::writePacked<u64>(out, relin_key->getPolyData(1, 1), DEGREE, p_bits);
+    serialization::writePacked<u64>(out, relin_key->getPolyData(0, 0), DEGREE, q_bits);
+    serialization::writePacked<u64>(out, relin_key->getPolyData(0, 1), DEGREE, p_bits);
 }
 
 void KeyPackData::saveEvalKeyFile(const std::string &path) const {
@@ -334,8 +411,8 @@ void KeyPackData::serialize(std::ostream &os) const {
     }
 
     serialization::writeHeader(os, serialization::kVersionV1);
-    const uint8_t q_bits = serialization::bitLengthU64(context_->getParam()->getPrimeQ());
-    const uint8_t p_bits = serialization::bitLengthU64(context_->getParam()->getPrimeP());
+    const uint8_t q_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 0));
+    const uint8_t p_bits = serialization::bitLengthU64(deb_prime_at(context_->getParam(), 1));
     os.write(reinterpret_cast<const char *>(&q_bits), sizeof(q_bits));
     os.write(reinterpret_cast<const char *>(&p_bits), sizeof(p_bits));
 
@@ -344,20 +421,17 @@ void KeyPackData::serialize(std::ostream &os) const {
     // deb::serializeToStream(deb_relin_key, os);
     // deb::serializeToStream(deb_mod_pack_key, os);
     os.write(reinterpret_cast<const char *>(&enc_loaded_), sizeof(bool));
-    serialization::writePackedU64(os, enckey->getPolyData(1, 0), DEGREE, q_bits);
-    serialization::writePackedU64(os, enckey->getPolyData(1, 1), DEGREE, p_bits);
-    serialization::writePackedU64(os, enckey->getPolyData(0, 0), DEGREE, q_bits);
-    serialization::writePackedU64(os, enckey->getPolyData(0, 1), DEGREE, p_bits);
+    writeEncKeyPacked(os, q_bits, p_bits);
     os.write(reinterpret_cast<const char *>(&eval_loaded_), sizeof(bool));
-    serialization::writePackedU64(os, relin_key->getPolyData(1, 0), DEGREE, q_bits);
-    serialization::writePackedU64(os, relin_key->getPolyData(1, 1), DEGREE, p_bits);
-    serialization::writePackedU64(os, relin_key->getPolyData(0, 0), DEGREE, q_bits);
-    serialization::writePackedU64(os, relin_key->getPolyData(0, 1), DEGREE, p_bits);
+    serialization::writePacked<u64>(os, relin_key->getPolyData(1, 0), DEGREE, q_bits);
+    serialization::writePacked<u64>(os, relin_key->getPolyData(1, 1), DEGREE, p_bits);
+    serialization::writePacked<u64>(os, relin_key->getPolyData(0, 0), DEGREE, q_bits);
+    serialization::writePacked<u64>(os, relin_key->getPolyData(0, 1), DEGREE, p_bits);
     const std::size_t count = static_cast<std::size_t>(DEGREE) * context_->getPadRank();
-    serialization::writePackedU64(os, mod_pack_key->getPolyData(1, 0), count, q_bits);
-    serialization::writePackedU64(os, mod_pack_key->getPolyData(1, 1), count, p_bits);
-    serialization::writePackedU64(os, mod_pack_key->getPolyData(0, 0), count, q_bits);
-    serialization::writePackedU64(os, mod_pack_key->getPolyData(0, 1), count, p_bits);
+    serialization::writePacked<u64>(os, mod_pack_key->getPolyData(1, 0), count, q_bits);
+    serialization::writePacked<u64>(os, mod_pack_key->getPolyData(1, 1), count, p_bits);
+    serialization::writePacked<u64>(os, mod_pack_key->getPolyData(0, 0), count, q_bits);
+    serialization::writePacked<u64>(os, mod_pack_key->getPolyData(0, 1), count, p_bits);
 }
 
 void KeyPackData::deserialize(std::istream &is) {
@@ -377,18 +451,30 @@ void KeyPackData::deserialize(std::istream &is) {
     // utils::syncDebSwkKeyToFixedKey(context_, deb_enc_key, enckey);
     // enc_loaded_ = true;
     is.read(reinterpret_cast<char *>(&enc_loaded_), sizeof(bool));
-    if (header.has_header) {
-        serialization::readPackedU64(is, enckey->getPolyData(1, 0), DEGREE, q_bits);
-        serialization::readPackedU64(is, enckey->getPolyData(1, 1), DEGREE, p_bits);
-        serialization::readPackedU64(is, enckey->getPolyData(0, 0), DEGREE, q_bits);
-        serialization::readPackedU64(is, enckey->getPolyData(0, 1), DEGREE, p_bits);
+    if (header.has_header && utils::isU32NativePreset(context_)) {
+        // u32-native (IP3): unpack straight into the u32 enc key — no u64
+        // enckey/deb_enc_key materialized. Wire is byte-identical to u64.
+        deb_enc_key32.emplace(utils::getDebPreset(context_), deb::SWK_ENC);
+        deb_enc_key32->addAx(2, 1);
+        deb_enc_key32->addBx(2, 1);
+        serialization::readPacked<u32>(is, deb_enc_key32->ax(0)[0].data(), DEGREE, q_bits);
+        serialization::readPacked<u32>(is, deb_enc_key32->ax(0)[1].data(), DEGREE, p_bits);
+        serialization::readPacked<u32>(is, deb_enc_key32->bx(0)[0].data(), DEGREE, q_bits);
+        serialization::readPacked<u32>(is, deb_enc_key32->bx(0)[1].data(), DEGREE, p_bits);
     } else {
-        is.read(reinterpret_cast<char *>(enckey->getPolyData(1, 0)), U64_DEGREE);
-        is.read(reinterpret_cast<char *>(enckey->getPolyData(1, 1)), U64_DEGREE);
-        is.read(reinterpret_cast<char *>(enckey->getPolyData(0, 0)), U64_DEGREE);
-        is.read(reinterpret_cast<char *>(enckey->getPolyData(0, 1)), U64_DEGREE);
+        if (header.has_header) {
+            serialization::readPacked<u64>(is, enckey->getPolyData(1, 0), DEGREE, q_bits);
+            serialization::readPacked<u64>(is, enckey->getPolyData(1, 1), DEGREE, p_bits);
+            serialization::readPacked<u64>(is, enckey->getPolyData(0, 0), DEGREE, q_bits);
+            serialization::readPacked<u64>(is, enckey->getPolyData(0, 1), DEGREE, p_bits);
+        } else {
+            is.read(reinterpret_cast<char *>(enckey->getPolyData(1, 0)), U64_DEGREE);
+            is.read(reinterpret_cast<char *>(enckey->getPolyData(1, 1)), U64_DEGREE);
+            is.read(reinterpret_cast<char *>(enckey->getPolyData(0, 0)), U64_DEGREE);
+            is.read(reinterpret_cast<char *>(enckey->getPolyData(0, 1)), U64_DEGREE);
+        }
+        utils::syncFixedKeyToDebSwkKey(context_, enckey, deb_enc_key);
     }
-    utils::syncFixedKeyToDebSwkKey(context_, enckey, deb_enc_key);
 
     // TODO: replace below with the following deb deserialize function
     // deb::deserializeFromStream(is, deb_relin_key);
@@ -398,15 +484,15 @@ void KeyPackData::deserialize(std::istream &is) {
     // eval_loaded_ = true;
     is.read(reinterpret_cast<char *>(&eval_loaded_), sizeof(bool));
     if (header.has_header) {
-        serialization::readPackedU64(is, relin_key->getPolyData(1, 0), DEGREE, q_bits);
-        serialization::readPackedU64(is, relin_key->getPolyData(1, 1), DEGREE, p_bits);
-        serialization::readPackedU64(is, relin_key->getPolyData(0, 0), DEGREE, q_bits);
-        serialization::readPackedU64(is, relin_key->getPolyData(0, 1), DEGREE, p_bits);
+        serialization::readPacked<u64>(is, relin_key->getPolyData(1, 0), DEGREE, q_bits);
+        serialization::readPacked<u64>(is, relin_key->getPolyData(1, 1), DEGREE, p_bits);
+        serialization::readPacked<u64>(is, relin_key->getPolyData(0, 0), DEGREE, q_bits);
+        serialization::readPacked<u64>(is, relin_key->getPolyData(0, 1), DEGREE, p_bits);
         const std::size_t count = static_cast<std::size_t>(DEGREE) * context_->getPadRank();
-        serialization::readPackedU64(is, mod_pack_key->getPolyData(1, 0), count, q_bits);
-        serialization::readPackedU64(is, mod_pack_key->getPolyData(1, 1), count, p_bits);
-        serialization::readPackedU64(is, mod_pack_key->getPolyData(0, 0), count, q_bits);
-        serialization::readPackedU64(is, mod_pack_key->getPolyData(0, 1), count, p_bits);
+        serialization::readPacked<u64>(is, mod_pack_key->getPolyData(1, 0), count, q_bits);
+        serialization::readPacked<u64>(is, mod_pack_key->getPolyData(1, 1), count, p_bits);
+        serialization::readPacked<u64>(is, mod_pack_key->getPolyData(0, 0), count, q_bits);
+        serialization::readPacked<u64>(is, mod_pack_key->getPolyData(0, 1), count, p_bits);
     } else {
         is.read(reinterpret_cast<char *>(relin_key->getPolyData(1, 0)), U64_DEGREE);
         is.read(reinterpret_cast<char *>(relin_key->getPolyData(1, 1)), U64_DEGREE);
@@ -452,10 +538,10 @@ void KeyPackData::loadEncKeyBuffer(std::istream &is) {
         uint8_t p_bits = 0;
         is.read(reinterpret_cast<char *>(&q_bits), sizeof(q_bits));
         is.read(reinterpret_cast<char *>(&p_bits), sizeof(p_bits));
-        serialization::readPackedU64(is, enckey->getPolyData(1, 0), DEGREE, q_bits);
-        serialization::readPackedU64(is, enckey->getPolyData(1, 1), DEGREE, p_bits);
-        serialization::readPackedU64(is, enckey->getPolyData(0, 0), DEGREE, q_bits);
-        serialization::readPackedU64(is, enckey->getPolyData(0, 1), DEGREE, p_bits);
+        serialization::readPacked<u64>(is, enckey->getPolyData(1, 0), DEGREE, q_bits);
+        serialization::readPacked<u64>(is, enckey->getPolyData(1, 1), DEGREE, p_bits);
+        serialization::readPacked<u64>(is, enckey->getPolyData(0, 0), DEGREE, q_bits);
+        serialization::readPacked<u64>(is, enckey->getPolyData(0, 1), DEGREE, p_bits);
     } else {
         is.read(reinterpret_cast<char *>(enckey->getPolyData(1, 0)), U64_DEGREE);
         is.read(reinterpret_cast<char *>(enckey->getPolyData(1, 1)), U64_DEGREE);
@@ -466,6 +552,36 @@ void KeyPackData::loadEncKeyBuffer(std::istream &is) {
     enc_loaded_ = true;
 }
 
+bool KeyPackData::peekIsArchive(std::istream &is) {
+    // Archive detection must read past the variable-length EVIS header to peek
+    // the next byte, which is only safe on a seekable stream we can rewind.
+    // For non-seekable streams (tellg() == -1) we must NOT consume the header:
+    // doing so would corrupt the cursor (it cannot be restored) and silently
+    // break even the raw KeyPackData path. The caller is responsible for
+    // spooling non-seekable streams to a temp file before probing.
+    std::streampos start = is.tellg();
+    if (start == std::streampos(-1)) {
+        is.clear(); // drop the failbit set by the failed tellg()
+        return false;
+    }
+    bool is_bundle = false;
+    int first = is.peek();
+    if (first == 'D' || first == 'F') {
+        is_bundle = true;
+    } else {
+        auto header = serialization::readHeader(is);
+        if (header.has_header) {
+            int next = is.peek();
+            if (next == 'D' || next == 'F') {
+                is_bundle = true;
+            }
+        }
+    }
+    is.clear(); // drop the eof/fail bits set while probing
+    is.seekg(start);
+    return is_bundle;
+}
+
 void KeyPackData::loadEvalKeyFile(const std::string &path, EvalKeyComponents components) {
     // Save components in thread-local-like storage? No — simpler: call the
     // buffer loader directly on the raw file/bundle path. We replicate the
@@ -474,17 +590,31 @@ void KeyPackData::loadEvalKeyFile(const std::string &path, EvalKeyComponents com
 
     auto select_eval_key_file = [&](const fs::path &dir_path) {
         fs::path expected = dir_path / ("EVIKeys" + std::to_string(context_->getPadRank()) + ".bin");
-        if (fs::exists(expected) ||
-            (context_->getEvalMode() != EvalMode::SINGLE && !CHECK_MM(context_->getEvalMode()))) {
+        if (fs::exists(expected)) {
             return expected;
         }
+        // The save side names eval-key files by the per-context rank suffix
+        // (RMP: inner_rank_list_[i].first, FLAT: rank_list_[i]), which can
+        // differ from getPadRank() for a single context -- so the padRank-named
+        // file may be absent even though the bundle is valid. Recover by
+        // scanning the bundle dir: if exactly one EVIKeys*.bin is present the
+        // choice is unambiguous (single-context bundle). With multiple
+        // candidates we cannot safely guess which rank maps to this context,
+        // so fall through to `expected` and let the FileNotFound surface the
+        // real multi-rank naming mismatch instead of loading the wrong key.
         if (fs::exists(dir_path) && fs::is_directory(dir_path)) {
+            fs::path sole_candidate;
+            int candidate_count = 0;
             for (const auto &entry : fs::directory_iterator(dir_path)) {
                 const fs::path &candidate = entry.path();
                 if (entry.is_regular_file() && candidate.extension() == ".bin" &&
                     candidate.filename().string().rfind("EVIKeys", 0) == 0) {
-                    return candidate;
+                    sole_candidate = candidate;
+                    ++candidate_count;
                 }
+            }
+            if (candidate_count == 1) {
+                return sole_candidate;
             }
         }
         return expected;
@@ -503,29 +633,11 @@ void KeyPackData::loadEvalKeyFile(const std::string &path, EvalKeyComponents com
         if (!in.is_open()) {
             throw evi::FileNotFoundError("Failed to load evaluation key" + file_path.string());
         }
-
-        bool is_bundle = false;
-        int first = in.peek();
-        if (first == 'D' || first == 'F') {
-            is_bundle = true;
-        } else {
-            auto header = serialization::readHeader(in);
-            if (header.has_header) {
-                int next = in.peek();
-                if (next == 'D' || next == 'F') {
-                    is_bundle = true;
-                }
-            }
-        }
-
-        in.clear();
-        in.seekg(0, std::ios::beg);
-        if (is_bundle) {
+        if (peekIsArchive(in)) {
             in.close();
             handle_eval_bundle(file_path);
             return;
         }
-
         loadEvalKeyBuffer(in, components);
         in.close();
     };
@@ -562,6 +674,38 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is) {
 }
 
 void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents components) {
+    // EvalKey streams come in two formats:
+    //   1. raw KeyPackData buffer (saveEvalKeyFile / getEvalKeyBuffer output):
+    //        flag(1) + EVIS header + payload
+    //   2. multi-rank archive built by utils::serializeEvalKey (the format
+    //      MultiKeyGenerator writes to EvalKey.bin):
+    //        EVIS header + ('D'|'F') + relative-path + payload
+    // Dispatch off peekIsArchive so the buffer loader stays consistent with
+    // the file-path loader (both go through the same detection logic).
+    if (peekIsArchive(is)) {
+        namespace fs = std::filesystem;
+        const auto ts = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        fs::path tmp_dir = fs::temp_directory_path() / (".evi-evalkey-bundle-" + std::to_string(ts));
+        fs::create_directories(tmp_dir);
+        fs::path bundle = tmp_dir / "EvalKey.bin";
+        {
+            std::ofstream out(bundle, std::ios::binary);
+            if (!out.is_open()) {
+                fs::remove_all(tmp_dir);
+                throw evi::EviError("Failed to materialize eval-key bundle to temp file");
+            }
+            out << is.rdbuf();
+        }
+        try {
+            loadEvalKeyFile(bundle.string(), components);
+        } catch (...) {
+            fs::remove_all(tmp_dir);
+            throw;
+        }
+        fs::remove_all(tmp_dir);
+        return;
+    }
+
     const bool load_relin = hasComponent(components, EvalKeyComponents::Relin);
     const bool load_modpack = hasComponent(components, EvalKeyComponents::ModPack);
     const bool load_transpose = hasComponent(components, EvalKeyComponents::Transpose);
@@ -583,10 +727,10 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
     if (context_->getEvalMode() == EvalMode::SINGLE) {
         if (load_relin) {
             if (header.has_header) {
-                serialization::readPackedU64(is, relin_key->getPolyData(1, 0), DEGREE, q_bits);
-                serialization::readPackedU64(is, relin_key->getPolyData(1, 1), DEGREE, p_bits);
-                serialization::readPackedU64(is, relin_key->getPolyData(0, 0), DEGREE, q_bits);
-                serialization::readPackedU64(is, relin_key->getPolyData(0, 1), DEGREE, p_bits);
+                serialization::readPacked<u64>(is, relin_key->getPolyData(1, 0), DEGREE, q_bits);
+                serialization::readPacked<u64>(is, relin_key->getPolyData(1, 1), DEGREE, p_bits);
+                serialization::readPacked<u64>(is, relin_key->getPolyData(0, 0), DEGREE, q_bits);
+                serialization::readPacked<u64>(is, relin_key->getPolyData(0, 1), DEGREE, p_bits);
             } else {
                 is.read((char *)relin_key->getPolyData(1, 0), U64_DEGREE);
                 is.read((char *)relin_key->getPolyData(1, 1), U64_DEGREE);
@@ -607,10 +751,10 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
     } else if (!CHECK_MM(context_->getEvalMode())) {
         if (header.has_header) {
             if (load_relin) {
-                serialization::readPackedU64(is, relin_key->getPolyData(1, 0), DEGREE, q_bits);
-                serialization::readPackedU64(is, relin_key->getPolyData(1, 1), DEGREE, p_bits);
-                serialization::readPackedU64(is, relin_key->getPolyData(0, 0), DEGREE, q_bits);
-                serialization::readPackedU64(is, relin_key->getPolyData(0, 1), DEGREE, p_bits);
+                serialization::readPacked<u64>(is, relin_key->getPolyData(1, 0), DEGREE, q_bits);
+                serialization::readPacked<u64>(is, relin_key->getPolyData(1, 1), DEGREE, p_bits);
+                serialization::readPacked<u64>(is, relin_key->getPolyData(0, 0), DEGREE, q_bits);
+                serialization::readPacked<u64>(is, relin_key->getPolyData(0, 1), DEGREE, p_bits);
             } else {
                 serialization::skipPackedU64(is, DEGREE, q_bits);
                 serialization::skipPackedU64(is, DEGREE, p_bits);
@@ -619,10 +763,10 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
             }
             const std::size_t count = static_cast<std::size_t>(DEGREE) * context_->getPadRank();
             if (load_modpack) {
-                serialization::readPackedU64(is, mod_pack_key->getPolyData(1, 0), count, q_bits);
-                serialization::readPackedU64(is, mod_pack_key->getPolyData(1, 1), count, p_bits);
-                serialization::readPackedU64(is, mod_pack_key->getPolyData(0, 0), count, q_bits);
-                serialization::readPackedU64(is, mod_pack_key->getPolyData(0, 1), count, p_bits);
+                serialization::readPacked<u64>(is, mod_pack_key->getPolyData(1, 0), count, q_bits);
+                serialization::readPacked<u64>(is, mod_pack_key->getPolyData(1, 1), count, p_bits);
+                serialization::readPacked<u64>(is, mod_pack_key->getPolyData(0, 0), count, q_bits);
+                serialization::readPacked<u64>(is, mod_pack_key->getPolyData(0, 1), count, p_bits);
             } else {
                 serialization::skipPackedU64(is, count, q_bits);
                 serialization::skipPackedU64(is, count, p_bits);
@@ -669,22 +813,25 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
         }
 
         if (load_transpose) {
+            const bool transpose_u32 = context_->getParam()->getPreset() == evi::ParameterPreset::IP3 &&
+                                       context_->getDeviceType() == evi::DeviceType::CPU;
             key_switching_key.resize(DEGREE);
             for (int i = 0; i < DEGREE; i++) {
                 auto &key = key_switching_key[i];
-                key->setSize(DEGREE * poly_count);
-                if (header.has_header) {
-                    for (deb::Size gi = 0; gi < gadget_rank; ++gi) {
-                        for (deb::Size pj = 0; pj < num_p; ++pj) {
-                            const std::size_t idx = (gi * num_p + pj) * DEGREE;
-                            const uint8_t bits = p_bits_list[pj];
-                            serialization::readPackedU64(is, key->getPolyData(1, 0) + idx, DEGREE, bits);
-                            serialization::readPackedU64(is, key->getPolyData(0, 0) + idx, DEGREE, bits);
-                        }
-                    }
+                const std::size_t count = static_cast<std::size_t>(DEGREE) * poly_count;
+                if (transpose_u32) {
+                    auto key32 = std::make_shared<Matrix<DataType::CIPHER, u32>>(0);
+                    key32->setSize(static_cast<int>(count));
+                    readTransposeKeyInto<u32>(is, *key32, header.has_header, gadget_rank, num_p, p_bits_list,
+                                              poly_count);
+                    key32->preset = ParameterPreset::IP3;
+                    key.emplace<KeyPackData::TransposeKey32>(std::move(key32));
                 } else {
-                    is.read(reinterpret_cast<char *>(key->getPolyData(1, 0)), U64_DEGREE * poly_count);
-                    is.read(reinterpret_cast<char *>(key->getPolyData(0, 0)), U64_DEGREE * poly_count);
+                    VariadicKeyType key64;
+                    key64->setSize(static_cast<int>(count));
+                    readTransposeKeyInto<u64>(is, *key64, header.has_header, gadget_rank, num_p, p_bits_list,
+                                              poly_count);
+                    key.emplace<VariadicKeyType>(std::move(key64));
                 }
             }
         } else {
@@ -719,10 +866,10 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
                     const std::size_t count = static_cast<std::size_t>(bwd_count) * DEGREE;
                     if (load_fwd) {
                         shared_a_mod_pack_key->setSize(count);
-                        serialization::readPackedU64(is, shared_a_mod_pack_key->getPolyData(1, 0), count, q_bits);
-                        serialization::readPackedU64(is, shared_a_mod_pack_key->getPolyData(1, 1), count, p_bits);
-                        serialization::readPackedU64(is, shared_a_mod_pack_key->getPolyData(0, 0), count, q_bits);
-                        serialization::readPackedU64(is, shared_a_mod_pack_key->getPolyData(0, 1), count, p_bits);
+                        serialization::readPacked<u64>(is, shared_a_mod_pack_key->getPolyData(1, 0), count, q_bits);
+                        serialization::readPacked<u64>(is, shared_a_mod_pack_key->getPolyData(1, 1), count, p_bits);
+                        serialization::readPacked<u64>(is, shared_a_mod_pack_key->getPolyData(0, 0), count, q_bits);
+                        serialization::readPacked<u64>(is, shared_a_mod_pack_key->getPolyData(0, 1), count, p_bits);
                         shared_a_mod_pack_loaded_ = true;
                     } else {
                         serialization::skipPackedU64(is, count, q_bits);
@@ -735,10 +882,14 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
                     const std::size_t sa_count = static_cast<std::size_t>(nss) * DEGREE;
                     if (load_fwd) {
                         cc_shared_a_mod_pack_key->setSize(sa_count);
-                        serialization::readPackedU64(is, cc_shared_a_mod_pack_key->getPolyData(1, 0), sa_count, q_bits);
-                        serialization::readPackedU64(is, cc_shared_a_mod_pack_key->getPolyData(1, 1), sa_count, p_bits);
-                        serialization::readPackedU64(is, cc_shared_a_mod_pack_key->getPolyData(0, 0), sa_count, q_bits);
-                        serialization::readPackedU64(is, cc_shared_a_mod_pack_key->getPolyData(0, 1), sa_count, p_bits);
+                        serialization::readPacked<u64>(is, cc_shared_a_mod_pack_key->getPolyData(1, 0), sa_count,
+                                                       q_bits);
+                        serialization::readPacked<u64>(is, cc_shared_a_mod_pack_key->getPolyData(1, 1), sa_count,
+                                                       p_bits);
+                        serialization::readPacked<u64>(is, cc_shared_a_mod_pack_key->getPolyData(0, 0), sa_count,
+                                                       q_bits);
+                        serialization::readPacked<u64>(is, cc_shared_a_mod_pack_key->getPolyData(0, 1), sa_count,
+                                                       p_bits);
                         cc_shared_a_mod_pack_loaded_ = true;
                     } else {
                         serialization::skipPackedU64(is, sa_count, q_bits);
@@ -752,10 +903,10 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
                     const std::size_t fwd_a = static_cast<std::size_t>(nss) * DEGREE;
                     if (load_fwd) {
                         shared_a_key->setSize(fwd_b, fwd_a);
-                        serialization::readPackedU64(is, shared_a_key->getPolyData(0, 0), fwd_b, q_bits);
-                        serialization::readPackedU64(is, shared_a_key->getPolyData(0, 1), fwd_b, p_bits);
-                        serialization::readPackedU64(is, shared_a_key->getPolyData(1, 0), fwd_a, q_bits);
-                        serialization::readPackedU64(is, shared_a_key->getPolyData(1, 1), fwd_a, p_bits);
+                        serialization::readPacked<u64>(is, shared_a_key->getPolyData(0, 0), fwd_b, q_bits);
+                        serialization::readPacked<u64>(is, shared_a_key->getPolyData(0, 1), fwd_b, p_bits);
+                        serialization::readPacked<u64>(is, shared_a_key->getPolyData(1, 0), fwd_a, q_bits);
+                        serialization::readPacked<u64>(is, shared_a_key->getPolyData(1, 1), fwd_a, p_bits);
                         shared_a_key_loaded_ = true;
                     } else {
                         serialization::skipPackedU64(is, fwd_b, q_bits);
@@ -764,21 +915,20 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
                         serialization::skipPackedU64(is, fwd_a, p_bits);
                     }
 
-                    // QPR: R-channel data for forward key
+                    // Backward-compat: legacy keypacks may carry the
+                    // deprecated QPR R-channel section. r_prime / r_bits are
+                    // read off the wire to advance the stream cursor, then
+                    // the packed payload is skipped — the R-channel keys are
+                    // no longer materialised. New keypacks always write
+                    // has_r == 0 (see getEvalKeyBuffer).
                     uint8_t has_r = 0;
                     if (is.read(reinterpret_cast<char *>(&has_r), sizeof(has_r)) && has_r) {
-                        is.read(reinterpret_cast<char *>(&r_prime_), sizeof(r_prime_));
+                        u64 r_prime = 0;
+                        is.read(reinterpret_cast<char *>(&r_prime), sizeof(r_prime));
                         uint8_t r_bits = 0;
                         is.read(reinterpret_cast<char *>(&r_bits), sizeof(r_bits));
-                        if (load_fwd) {
-                            shared_a_key_r_a.resize(fwd_a);
-                            shared_a_key_r_b.resize(fwd_b);
-                            serialization::readPackedU64(is, shared_a_key_r_a.data(), fwd_a, r_bits);
-                            serialization::readPackedU64(is, shared_a_key_r_b.data(), fwd_b, r_bits);
-                        } else {
-                            serialization::skipPackedU64(is, fwd_a, r_bits);
-                            serialization::skipPackedU64(is, fwd_b, r_bits);
-                        }
+                        serialization::skipPackedU64(is, fwd_a, r_bits);
+                        serialization::skipPackedU64(is, fwd_b, r_bits);
                     }
                 }
                 // MMS deb QPR forward keys (independent of legacy flag 0x04)
@@ -797,10 +947,10 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
                                 for (deb::Size d = 0; d < deb_gr; ++d) {
                                     for (deb::Size p = 0; p < deb_np; ++p) {
                                         const uint8_t bits = serialization::bitLengthU64(deb_p[p]);
-                                        serialization::readPackedU64(is, shared_a_fwd_keys[s].ax(d)[p].data(), DEGREE,
-                                                                     bits);
-                                        serialization::readPackedU64(is, shared_a_fwd_keys[s].bx(d)[p].data(), DEGREE,
-                                                                     bits);
+                                        serialization::readPacked<u64>(is, shared_a_fwd_keys[s].ax(d)[p].data(), DEGREE,
+                                                                       bits);
+                                        serialization::readPacked<u64>(is, shared_a_fwd_keys[s].bx(d)[p].data(), DEGREE,
+                                                                       bits);
                                     }
                                 }
                             }
@@ -823,8 +973,8 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
                                 for (deb::Size d = 0; d < deb_gr; ++d) {
                                     for (deb::Size p = 0; p < deb_np; ++p) {
                                         const uint8_t bits = serialization::bitLengthU64(deb_p[p]);
-                                        serialization::readPackedU64(is, shared_a_off_diag_keys[idx].bx(d)[p].data(),
-                                                                     DEGREE, bits);
+                                        serialization::readPacked<u64>(is, shared_a_off_diag_keys[idx].bx(d)[p].data(),
+                                                                       DEGREE, bits);
                                     }
                                 }
                             }
@@ -844,21 +994,47 @@ void KeyPackData::loadEvalKeyBuffer(std::istream &is, EvalKeyComponents componen
                         // writer side exactly — see KeyPackImpl.cpp save path.
                         const uint8_t bwd_q_bits = serialization::bitLengthU64(context_->getParam()->getBackwardKeyQ());
                         const uint8_t bwd_p_bits = serialization::bitLengthU64(context_->getParam()->getBackwardKeyP());
+                        // IP3 -> u32 alternative, others (incl. IP2 after the
+                        // IP2->u64 demotion) -> u64. Wire payload byte-
+                        // identical (same width); format unchanged. Single
+                        // source of truth shared with the KeyGeneratorImpl writer
+                        // (utils::isU32BackwardKey), so the read-side allocation
+                        // and the write-side variant choice are the same call.
+                        const bool bwd_u32 = utils::isU32BackwardKey(context_);
                         if (load_bwd) {
                             shared_a_bwd_l0_keys.resize(nss);
                             for (int j = 0; j < nss; ++j) {
-                                shared_a_bwd_l0_keys[j].ax_q.resize(DEGREE);
-                                shared_a_bwd_l0_keys[j].ax_p.resize(DEGREE);
-                                shared_a_bwd_l0_keys[j].bx_q.resize(DEGREE);
-                                shared_a_bwd_l0_keys[j].bx_p.resize(DEGREE);
-                                serialization::readPackedU64(is, shared_a_bwd_l0_keys[j].ax_q.data(), DEGREE,
-                                                             bwd_q_bits);
-                                serialization::readPackedU64(is, shared_a_bwd_l0_keys[j].ax_p.data(), DEGREE,
-                                                             bwd_p_bits);
-                                serialization::readPackedU64(is, shared_a_bwd_l0_keys[j].bx_q.data(), DEGREE,
-                                                             bwd_q_bits);
-                                serialization::readPackedU64(is, shared_a_bwd_l0_keys[j].bx_p.data(), DEGREE,
-                                                             bwd_p_bits);
+                                auto &bk = shared_a_bwd_l0_keys[j];
+                                // ONE irreducible preset-driven gate per key:
+                                // a variant alternative must be chosen before
+                                // any value exists, so there is nothing to
+                                // std::visit on yet. After the alternative is
+                                // selected (size DEGREE, exactly one
+                                // representation), the per-field read collapses
+                                // to a visit. readPacked consumes the same
+                                // words*sizeof(u64) bytes regardless of T and
+                                // unpack_fixedW<u32> applies the same narrowing
+                                // the explicit static_cast loop did — wire and
+                                // value identical.
+                                using BL0 = detail::KeyPackData::BackwardL0Key;
+                                auto initF = [&](BL0::Poly &f) {
+                                    if (bwd_u32)
+                                        f.emplace<polyvec32>(DEGREE);
+                                    else
+                                        f.emplace<polyvec>(DEGREE);
+                                };
+                                auto readF = [&](BL0::Poly &f, uint8_t bits) {
+                                    initF(f);
+                                    std::visit(
+                                        [&](auto &v) {
+                                            serialization::readPacked(is, v.data(), DEGREE, bits);
+                                        },
+                                        f);
+                                };
+                                readF(bk.ax_q, bwd_q_bits);
+                                readF(bk.ax_p, bwd_p_bits);
+                                readF(bk.bx_q, bwd_q_bits);
+                                readF(bk.bx_p, bwd_p_bits);
                             }
                         } else {
                             for (int j = 0; j < nss; ++j) {
@@ -900,10 +1076,10 @@ void KeyPackData::loadRelinKeyBuffer(std::istream &is) {
         uint8_t p_bits = 0;
         is.read(reinterpret_cast<char *>(&q_bits), sizeof(q_bits));
         is.read(reinterpret_cast<char *>(&p_bits), sizeof(p_bits));
-        serialization::readPackedU64(is, relin_key->getPolyData(1, 0), DEGREE, q_bits);
-        serialization::readPackedU64(is, relin_key->getPolyData(1, 1), DEGREE, p_bits);
-        serialization::readPackedU64(is, relin_key->getPolyData(0, 0), DEGREE, q_bits);
-        serialization::readPackedU64(is, relin_key->getPolyData(0, 1), DEGREE, p_bits);
+        serialization::readPacked<u64>(is, relin_key->getPolyData(1, 0), DEGREE, q_bits);
+        serialization::readPacked<u64>(is, relin_key->getPolyData(1, 1), DEGREE, p_bits);
+        serialization::readPacked<u64>(is, relin_key->getPolyData(0, 0), DEGREE, q_bits);
+        serialization::readPacked<u64>(is, relin_key->getPolyData(0, 1), DEGREE, p_bits);
     } else {
         is.read((char *)relin_key->getPolyData(1, 0), U64_DEGREE);
         is.read((char *)relin_key->getPolyData(1, 1), U64_DEGREE);
@@ -939,10 +1115,10 @@ void KeyPackData::loadModPackKeyBuffer(std::istream &is) {
         is.read(reinterpret_cast<char *>(&q_bits), sizeof(q_bits));
         is.read(reinterpret_cast<char *>(&p_bits), sizeof(p_bits));
         const std::size_t count = static_cast<std::size_t>(DEGREE) * context_->getPadRank();
-        serialization::readPackedU64(is, mod_pack_key->getPolyData(1, 0), count, q_bits);
-        serialization::readPackedU64(is, mod_pack_key->getPolyData(1, 1), count, p_bits);
-        serialization::readPackedU64(is, mod_pack_key->getPolyData(0, 0), count, q_bits);
-        serialization::readPackedU64(is, mod_pack_key->getPolyData(0, 1), count, p_bits);
+        serialization::readPacked<u64>(is, mod_pack_key->getPolyData(1, 0), count, q_bits);
+        serialization::readPacked<u64>(is, mod_pack_key->getPolyData(1, 1), count, p_bits);
+        serialization::readPacked<u64>(is, mod_pack_key->getPolyData(0, 0), count, q_bits);
+        serialization::readPacked<u64>(is, mod_pack_key->getPolyData(0, 1), count, p_bits);
     } else {
         is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(1, 0)), U64_DEGREE * context_->getPadRank());
         is.read(reinterpret_cast<char *>(mod_pack_key->getPolyData(1, 1)), U64_DEGREE * context_->getPadRank());

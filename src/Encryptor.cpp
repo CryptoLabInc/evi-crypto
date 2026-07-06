@@ -37,7 +37,7 @@ Encryptor makeEncryptor(const Context &context, const std::string &key_path) {
 
 [[deprecated("encryptBulk will be removed soon; migrate to encrypt(data, keypack, type, level, scale)")]]
 std::vector<Query> Encryptor::encryptBulk(const std::vector<std::vector<float>> &data, evi::EncodeType type,
-                                          int level) {
+                                          std::optional<uint32_t> level) {
     std::vector<detail::Query> queries = (*impl_)->encrypt(data, type, level);
     std::vector<Query> res;
     res.reserve(queries.size());
@@ -48,28 +48,28 @@ std::vector<Query> Encryptor::encryptBulk(const std::vector<std::vector<float>> 
 }
 
 [[deprecated("encrypt(data, type, level) will be removed soon; migrate to encrypt(data, keypack, type, level, scale)")]]
-Query Encryptor::encrypt(const std::vector<float> &data, evi::EncodeType type, int level) const {
+Query Encryptor::encrypt(const std::vector<float> &data, evi::EncodeType type, std::optional<uint32_t> level) const {
     return Query(std::make_shared<detail::Query>((*impl_)->encrypt(data, type, level)));
 }
 
-Query Encryptor::encrypt(const std::vector<float> &data, std::istream &enckey_stream, evi::EncodeType type, int level,
-                         std::optional<float> scale) const {
+Query Encryptor::encrypt(const std::vector<float> &data, std::istream &enckey_stream, evi::EncodeType type,
+                         std::optional<uint32_t> level, std::optional<float> scale) const {
     return Query(std::make_shared<detail::Query>((*impl_)->encrypt(data, enckey_stream, type, level, scale)));
 }
 
 Query Encryptor::encrypt(const std::vector<float> &data, const std::string &enckey_path, evi::EncodeType type,
-                         int level, std::optional<float> scale) const {
+                         std::optional<uint32_t> level, std::optional<float> scale) const {
     return Query(std::make_shared<detail::Query>((*impl_)->encrypt(data, enckey_path, type, level, scale)));
 }
 
-Query Encryptor::encrypt(const std::vector<float> &data, const KeyPack &keypack, evi::EncodeType type, int level,
-                         std::optional<float> scale) const {
+Query Encryptor::encrypt(const std::vector<float> &data, const KeyPack &keypack, evi::EncodeType type,
+                         std::optional<uint32_t> level, std::optional<float> scale) const {
     return Query(std::make_shared<detail::Query>((*impl_)->encrypt(data, getImpl(keypack), type, level, scale)));
 }
 
 [[deprecated("encrypt(data, type, level) will be removed soon; migrate to encrypt(data, keypack, type, level, scale)")]]
 std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &data, evi::EncodeType type,
-                                      int level) const {
+                                      std::optional<uint32_t> level) const {
     std::vector<detail::Query> queries = (*impl_)->encrypt(data, type, level);
     std::vector<Query> res;
     res.reserve(queries.size());
@@ -80,7 +80,8 @@ std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &dat
 }
 
 std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &data, const std::string &enckey_path,
-                                      evi::EncodeType type, int level, std::optional<float> scale) const {
+                                      evi::EncodeType type, std::optional<uint32_t> level,
+                                      std::optional<float> scale) const {
     std::vector<detail::Query> queries = (*impl_)->encrypt(data, enckey_path, type, level, scale);
     std::vector<Query> res;
     res.reserve(queries.size());
@@ -91,7 +92,8 @@ std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &dat
 }
 
 std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &data, std::istream &enckey_stream,
-                                      evi::EncodeType type, int level, std::optional<float> scale) const {
+                                      evi::EncodeType type, std::optional<uint32_t> level,
+                                      std::optional<float> scale) const {
     std::vector<detail::Query> queries = (*impl_)->encrypt(data, enckey_stream, type, level, scale);
     std::vector<Query> res;
     res.reserve(queries.size());
@@ -102,7 +104,8 @@ std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &dat
 }
 
 std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &data, const KeyPack &keypack,
-                                      evi::EncodeType type, int level, std::optional<float> scale) const {
+                                      evi::EncodeType type, std::optional<uint32_t> level,
+                                      std::optional<float> scale) const {
     std::vector<detail::Query> queries = (*impl_)->encrypt(data, getImpl(keypack), type, level, scale);
     std::vector<Query> res;
     res.reserve(queries.size());
@@ -113,31 +116,33 @@ std::vector<Query> Encryptor::encrypt(const std::vector<std::vector<float>> &dat
 }
 
 std::vector<std::string> Encryptor::encryptRow(const std::vector<std::vector<float>> &data,
-                                               const std::string &enckey_path, evi::EncodeType type, int level,
-                                               std::optional<float> scale) const {
+                                               const std::string &enckey_path, evi::EncodeType type,
+                                               std::optional<uint32_t> level, std::optional<float> scale) const {
     (*impl_)->loadEncKey(enckey_path);
-    return (*impl_)->encryptRow(data, type, level != 0, scale);
+    return (*impl_)->encryptRow(data, type, level, scale);
 }
 
 std::vector<std::string> Encryptor::encryptRow(const std::vector<std::vector<float>> &data, std::istream &enckey_stream,
-                                               evi::EncodeType type, int level, std::optional<float> scale) const {
+                                               evi::EncodeType type, std::optional<uint32_t> level,
+                                               std::optional<float> scale) const {
     (*impl_)->loadEncKey(enckey_stream);
-    return (*impl_)->encryptRow(data, type, level != 0, scale);
+    return (*impl_)->encryptRow(data, type, level, scale);
 }
 
 std::vector<std::string> Encryptor::encryptRow(const std::vector<std::vector<float>> &data, const KeyPack &keypack,
-                                               evi::EncodeType type, int level, std::optional<float> scale) const {
+                                               evi::EncodeType type, std::optional<uint32_t> level,
+                                               std::optional<float> scale) const {
     (*impl_)->loadEncKey(getImpl(keypack));
-    return (*impl_)->encryptRow(data, type, level != 0, scale);
+    return (*impl_)->encryptRow(data, type, level, scale);
 }
 
-Query Encryptor::encode(const std::vector<float> &data, evi::EncodeType type, int level,
+Query Encryptor::encode(const std::vector<float> &data, evi::EncodeType type, std::optional<uint32_t> level,
                         std::optional<float> scale) const {
     return Query(std::make_shared<detail::Query>((*impl_)->encode(data, type, level, scale)));
 }
 
 std::vector<Query> Encryptor::encode(const std::vector<std::vector<float>> &data, evi::EncodeType type,
-                                     int level) const {
+                                     std::optional<uint32_t> level) const {
     std::vector<Query> result;
     result.reserve(data.size());
     for (const auto &item : data) {
@@ -146,8 +151,8 @@ std::vector<Query> Encryptor::encode(const std::vector<std::vector<float>> &data
     return result;
 }
 
-Query Encryptor::encode(const std::vector<std::vector<float>> &msg, const EncodeType type, const int level,
-                        std::optional<float> scale) {
+Query Encryptor::encode(const std::vector<std::vector<float>> &msg, const EncodeType type,
+                        std::optional<uint32_t> level, std::optional<float> scale) {
     return Query(std::make_shared<detail::Query>((*impl_)->encode(msg, type, level, scale)));
 }
 

@@ -25,11 +25,13 @@
 #include "utils/Exceptions.hpp"
 #include "utils/span.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <istream>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -39,6 +41,7 @@
 namespace evi {
 
 namespace detail {
+
 class DecryptorInterface {
 public:
     explicit DecryptorInterface(const Context &context);
@@ -57,9 +60,21 @@ public:
                             std::optional<double> scale = std::nullopt) = 0;
     virtual Message decrypt(const int idx, const Query &ctxt, const SecretKey &key,
                             std::optional<double> scale = std::nullopt);
+    virtual std::vector<std::tuple<int, int, float>>
+    decryptBatchTopKParallel(const char *const *shard_blobs, const std::size_t *shard_blob_lens,
+                             std::size_t shard_count, const char *key_blob, std::size_t key_blob_len, int k,
+                             std::optional<double> scale = std::nullopt, int n_jobs = 1);
+
+    const Context &context() const {
+        return context_;
+    }
 
 protected:
-    deb::Decryptor deb_dec_;
+    deb::Decryptor &debDecryptor();
+    deb::Decryptor32 &debDecryptor32();
+
+    std::optional<deb::Decryptor> deb_dec_;
+    std::optional<deb::Decryptor32> deb_dec32_;
     const Context context_;
 };
 

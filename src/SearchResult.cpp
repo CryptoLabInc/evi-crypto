@@ -24,7 +24,7 @@ namespace evi {
 
 SearchResult::SearchResult(std::shared_ptr<detail::SearchResult> impl) : impl_(std::move(impl)) {}
 
-uint32_t SearchResult::getItemCount() {
+uint32_t SearchResult::getItemCount() const {
     const auto *handle = impl_.get();
     if (!handle) {
         throw NotSupportedError("Handle is null");

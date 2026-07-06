@@ -23,6 +23,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 #include "EVI/Const.hpp"
@@ -77,7 +79,8 @@ std::string toString(const std::function<void(std::ostream &)> &fn) {
     return oss.str();
 }
 
-void expectPolyEq(const u64 *lhs, const u64 *rhs, std::size_t count) {
+template <class T>
+void expectPolyEq(const T *lhs, const T *rhs, std::size_t count) {
     for (std::size_t i = 0; i < count; ++i) {
         ASSERT_EQ(lhs[i], rhs[i]) << "poly mismatch at index " << i;
     }
@@ -110,7 +113,7 @@ void expectSingleBlockEq(evi::detail::IQuery &lhs, evi::detail::IQuery &rhs) {
     }
 }
 
-void expectMatrixEq(evi::detail::IData &lhs, evi::detail::IData &rhs) {
+void expectMatrixEq(evi::detail::IData<u64> &lhs, evi::detail::IData<u64> &rhs) {
     ASSERT_EQ(lhs.getDataType(), rhs.getDataType());
     ASSERT_EQ(lhs.getLevel(), rhs.getLevel());
     ASSERT_EQ(lhs.n, rhs.n);
@@ -173,13 +176,177 @@ void expectKeyPackEq(const evi::KeyPack &lhs, const evi::KeyPack &rhs, const evi
                 auto &lhs_key = lhs_impl->key_switching_key[i];
                 auto &rhs_key = rhs_impl->key_switching_key[i];
                 const std::size_t kcount = static_cast<std::size_t>(DEGREE) * poly_count;
-                expectPolyEq(lhs_key->getPolyData(1, 0), rhs_key->getPolyData(1, 0), kcount);
-                expectPolyEq(lhs_key->getPolyData(0, 0), rhs_key->getPolyData(0, 0), kcount);
+                ASSERT_EQ(lhs_key.index(), rhs_key.index());
+                std::visit(
+                    [&](const auto &lhs_typed, const auto &rhs_typed) {
+                        using Lhs = std::decay_t<decltype(lhs_typed)>;
+                        using Rhs = std::decay_t<decltype(rhs_typed)>;
+                        if constexpr (std::is_same_v<Lhs, Rhs>) {
+                            expectPolyEq(lhs_typed->getPolyData(1, 0), rhs_typed->getPolyData(1, 0), kcount);
+                            expectPolyEq(lhs_typed->getPolyData(0, 0), rhs_typed->getPolyData(0, 0), kcount);
+                        }
+                    },
+                    lhs_key, rhs_key);
             }
         }
     }
 }
+evi::detail::SingleBlock<evi::DataType::CIPHER> makeCipherBlockForSerialization(bool level, u64 dim, bool zero_tail) {
+    evi::detail::poly a_q;
+    evi::detail::poly b_q;
+    evi::detail::poly a_p;
+    evi::detail::poly b_p;
+
+    for (u64 i = 0; i < DEGREE; ++i) {
+        a_q[i] = (i + 1) & 0xffff;
+        b_q[i] = (i + 17) & 0xffff;
+        a_p[i] = (i + 257) & 0xffff;
+        b_p[i] = (i + 4097) & 0xffff;
+    }
+    if (zero_tail && dim < DEGREE) {
+        for (u64 i = dim; i < DEGREE; ++i) {
+            b_q[i] = 0;
+            b_p[i] = 0;
+        }
+    }
+
+    evi::detail::SingleBlock<evi::DataType::CIPHER> block =
+        level ? evi::detail::SingleBlock<evi::DataType::CIPHER>(a_q, a_p, b_q, b_p)
+              : evi::detail::SingleBlock<evi::DataType::CIPHER>(a_q, b_q);
+    block.n = 1;
+    block.dim = dim;
+    block.degree = DEGREE;
+    block.show_dim = dim;
+    block.scale_bit = 20;
+    block.encode_type = evi::EncodeType::ITEM;
+    block.prime_q_bits = 16;
+    block.prime_p_bits = level ? 16 : 0;
+    return block;
+}
 } // namespace
+
+TEST(SerializationRoundTripTest, SingleBlockTruncatedBPartV2RoundTrip) {
+    constexpr u64 K_DIM = 64;
+    for (bool level : {false, true}) {
+        SCOPED_TRACE(level ? "level-1" : "level-0");
+        auto block = makeCipherBlockForSerialization(level, K_DIM, /*zero_tail=*/true);
+
+        const std::string blob = toString([&](std::ostream &os) {
+            block.serializeTo(os, evi::BTruncMode::TRUNC);
+        });
+
+        std::istringstream header_in(blob, std::ios::binary);
+        auto header = evi::detail::serialization::readHeader(header_in);
+        ASSERT_TRUE(header.has_header);
+        EXPECT_EQ(header.version, evi::detail::serialization::kVersionV2);
+
+        std::istringstream default_in(blob, std::ios::binary);
+        evi::detail::SingleBlock<evi::DataType::CIPHER> default_rt(default_in);
+        expectSingleBlockEq(block, default_rt);
+
+        std::istringstream explicit_in(blob, std::ios::binary);
+        evi::detail::SingleBlock<evi::DataType::CIPHER> explicit_rt(0);
+        explicit_rt.deserializeFrom(explicit_in, evi::BTruncMode::TRUNC);
+        expectSingleBlockEq(block, explicit_rt);
+    }
+}
+
+TEST(SerializationRoundTripTest, SingleBlockExplicitLenBPartV3RoundTrip) {
+    // V3 truncates b by an explicit length, independent of `dim`.
+    constexpr u64 K_LEN = 48;
+    for (bool level : {false, true}) {
+        SCOPED_TRACE(level ? "level-1" : "level-0");
+        auto block = makeCipherBlockForSerialization(level, K_LEN, /*zero_tail=*/true);
+        block.dim = DEGREE;
+        block.show_dim = DEGREE;
+
+        const std::string blob = toString([&](std::ostream &os) {
+            block.serializeTo(os, evi::BTruncMode::TRUNC, static_cast<std::uint32_t>(K_LEN));
+        });
+
+        std::istringstream header_in(blob, std::ios::binary);
+        auto header = evi::detail::serialization::readHeader(header_in);
+        ASSERT_TRUE(header.has_header);
+        EXPECT_EQ(header.version, evi::detail::serialization::kVersionV3);
+
+        std::istringstream in(blob, std::ios::binary);
+        evi::detail::SingleBlock<evi::DataType::CIPHER> rt(in);
+        expectSingleBlockEq(block, rt);
+    }
+}
+
+TEST(SerializationRoundTripTest, SingleBlockV3RejectsBTruncLenAboveDegree) {
+    // A length > DEGREE is impossible and must be rejected.
+    auto block = makeCipherBlockForSerialization(/*level=*/false, /*dim=*/64, /*zero_tail=*/true);
+    std::ostringstream os(std::ios::binary);
+    EXPECT_THROW(block.serializeTo(os, evi::BTruncMode::TRUNC, static_cast<std::uint32_t>(DEGREE) + 1),
+                 evi::InvalidInputError);
+}
+
+TEST(SerializationRoundTripTest, SingleBlockV1RoundTripPreservesFullBPart) {
+    constexpr u64 K_DIM = 64;
+    auto block = makeCipherBlockForSerialization(/*level=*/true, K_DIM, /*zero_tail=*/false);
+
+    const std::string blob = toString([&](std::ostream &os) {
+        block.serializeTo(os);
+    });
+
+    std::istringstream in(blob, std::ios::binary);
+    evi::detail::SingleBlock<evi::DataType::CIPHER> rt(in);
+    expectSingleBlockEq(block, rt);
+}
+
+TEST(SerializationRoundTripTest, SingleBlockTruncationIntentAlwaysMarksV2WhenDimEqualsDegree) {
+    // Version is intent-based: BTruncMode::TRUNC always writes V2, even when
+    // dim == DEGREE makes the byte payload identical to V1. This keeps the
+    // wire format stable for a fixed call site.
+    for (u64 dim : {u64{0}, u64{DEGREE}}) {
+        SCOPED_TRACE("dim=" + std::to_string(dim));
+        auto block = makeCipherBlockForSerialization(/*level=*/false, dim, /*zero_tail=*/false);
+
+        const std::string blob = toString([&](std::ostream &os) {
+            block.serializeTo(os, evi::BTruncMode::TRUNC);
+        });
+
+        std::istringstream header_in(blob, std::ios::binary);
+        auto header = evi::detail::serialization::readHeader(header_in);
+        ASSERT_TRUE(header.has_header);
+        EXPECT_EQ(header.version, evi::detail::serialization::kVersionV2);
+
+        std::istringstream in(blob, std::ios::binary);
+        evi::detail::SingleBlock<evi::DataType::CIPHER> rt(in);
+        expectSingleBlockEq(block, rt);
+
+        std::istringstream explicit_in(blob, std::ios::binary);
+        evi::detail::SingleBlock<evi::DataType::CIPHER> explicit_rt(0);
+        explicit_rt.deserializeFrom(explicit_in, evi::BTruncMode::TRUNC);
+        expectSingleBlockEq(block, explicit_rt);
+    }
+}
+
+TEST(SerializationRoundTripTest, SingleBlockTruncationDefaultWritesV1) {
+    auto block = makeCipherBlockForSerialization(/*level=*/false, /*dim=*/64, /*zero_tail=*/false);
+
+    const std::string blob = toString([&](std::ostream &os) {
+        block.serializeTo(os); // 1-arg overload always writes V1
+    });
+
+    std::istringstream header_in(blob, std::ios::binary);
+    auto header = evi::detail::serialization::readHeader(header_in);
+    ASSERT_TRUE(header.has_header);
+    EXPECT_EQ(header.version, evi::detail::serialization::kVersionV1);
+}
+
+TEST(SerializationRoundTripTest, SingleBlockTruncatedBPartRejectsFlagMismatch) {
+    auto block = makeCipherBlockForSerialization(/*level=*/false, /*dim=*/64, /*zero_tail=*/true);
+    const std::string blob = toString([&](std::ostream &os) {
+        block.serializeTo(os, evi::BTruncMode::TRUNC);
+    });
+
+    std::istringstream in(blob, std::ios::binary);
+    evi::detail::SingleBlock<evi::DataType::CIPHER> rt(0);
+    EXPECT_THROW(rt.deserializeFrom(in, evi::BTruncMode::NONE), evi::InvalidInputError);
+}
 
 TEST(SerializationRoundTripTest, QueryRoundTripAcrossModes) {
     evi::ParameterPreset preset = evi::ParameterPreset::IP0;
@@ -360,14 +527,14 @@ TEST(SerializationRoundTripTest, MatrixPresetRoundTrip) {
     polyvec a_q(DEG, 0), b_q(DEG, 0);
     for (u64 i = 0; i < DEG; ++i) {
         a_q[i] = i + 1;
-        b_q[i] = (i * 3 + 7) % IPBase::PRIME_Q;
+        b_q[i] = (i * 3 + 7) % IPBase::PRIMES_Q[0];
     }
 
     auto mat = std::make_shared<Matrix<evi::DataType::CIPHER>>(std::move(a_q), std::move(b_q));
     mat->n = n;
     mat->dim = dim;
     mat->degree = degree;
-    mat->prime_q_bits = evi::detail::serialization::bitLengthU64(IPBase::PRIME_Q);
+    mat->prime_q_bits = evi::detail::serialization::bitLengthU64(IPBase::PRIMES_Q[0]);
     mat->prime_p_bits = 0;
     mat->preset = ParameterPreset::IP0;
 
@@ -387,7 +554,7 @@ TEST(SerializationRoundTripTest, MatrixPresetRoundTrip) {
     mat2->n = n;
     mat2->dim = dim;
     mat2->degree = degree;
-    mat2->prime_q_bits = evi::detail::serialization::bitLengthU64(IP1Base::PRIME_Q);
+    mat2->prime_q_bits = evi::detail::serialization::bitLengthU64(IP1Base::PRIMES_Q[0]);
     mat2->prime_p_bits = 0;
     // preset left as default (RUNTIME)
 
@@ -398,4 +565,138 @@ TEST(SerializationRoundTripTest, MatrixPresetRoundTrip) {
     mat2_rt->deserializeFrom(ss2);
 
     EXPECT_EQ(mat2_rt->preset, ParameterPreset::RUNTIME) << "default RUNTIME preset must survive round-trip";
+}
+
+// ============================================================================
+// EVIS v1 prime-array compatibility invariants.
+//
+// The EVIS v1 wire format uses:
+//   q_bits header = bitLen(deb_primes[0]) = bitLen(PRIMES_Q[0])
+//   p_bits header = bitLen(deb_primes[1]) = bitLen(NumQ>1 ? PRIMES_Q[1] : PRIMES_P[0])
+//
+// These tests pin the per-preset prime values that are baked into shipped key
+// files (envector.io accounts, GCP Marketplace deployments, on-prem bundles).
+// Changing any of these values breaks loading of existing keys — same failure
+// mode as feedback_cross-preset-serialization-audit.md.
+//
+// Captured per-preset deb_primes values come from external/deb-param.json @
+// main HEAD (tracked baseline; if you change deb-param.json values the
+// compat invariant may need a coordinated update).
+// ============================================================================
+TEST(EvisV1PrimeArrayCompat, IPBaseDebPrimes) {
+    using evi::detail::IPBase;
+    // IP0: deb_primes = [Q=51b, T=55b]; multi-Q preset (NumQ=2, NumP=0).
+    // The 55-bit prime (deb "T-prime") is rebranded as a second chain rail.
+    // IP0 is IP-only (no relin/key-switch), so PRIMES_P is empty.
+    static_assert(IPBase::PRIMES_Q.size() == 2, "IP0 has two chain primes");
+    static_assert(IPBase::PRIMES_P.size() == 0, "IP0 has no aux key-switch primes");
+    EXPECT_EQ(IPBase::PRIMES_Q[0], 2251799813554177ULL);
+    EXPECT_EQ(IPBase::PRIMES_Q[1], 36028797014376449ULL);
+}
+
+TEST(EvisV1PrimeArrayCompat, IP1BaseDebPrimes) {
+    using evi::detail::IP1Base;
+    // IP1: deb_primes = [Q[0]=35b, Q[1]=35b, P[0]=39b]
+    // Critical: p_bits header = bitLen(PRIMES_Q[1]) (chain[1]), NOT PRIMES_P[0].
+    static_assert(IP1Base::PRIMES_Q.size() == 2, "IP1 chain has 2 primes");
+    static_assert(IP1Base::PRIMES_P.size() == 1, "IP1 aux has 1 prime");
+    EXPECT_EQ(IP1Base::PRIMES_Q[0], 17179754497ULL);
+    EXPECT_EQ(IP1Base::PRIMES_Q[1], 17179672577ULL);
+    EXPECT_EQ(IP1Base::PRIMES_P[0], 274877562881ULL);
+}
+
+TEST(EvisV1PrimeArrayCompat, IP2BaseDebPrimes) {
+    using evi::detail::IP2Base;
+    // IP2: deb_primes = [Q[0]=32b, Q[1]=32b, P[0]=42b]
+    // IP2 retains the single 42-bit aux P (NOT split, unlike IP3) for
+    // on-disk eval-key backward compatibility — IP2 is deployed; the aux
+    // P is serialized into evaluation keys and cannot be re-derived from
+    // a different prime domain. logQPR = 32+32+42 = 106.
+    static_assert(IP2Base::PRIMES_Q.size() == 2, "IP2 chain has 2 primes");
+    static_assert(IP2Base::PRIMES_P.size() == 1, "IP2 aux has single prime (not split)");
+    EXPECT_EQ(IP2Base::PRIMES_Q[0], 4294828033ULL);
+    EXPECT_EQ(IP2Base::PRIMES_Q[1], 4294729729ULL);
+    EXPECT_EQ(IP2Base::PRIMES_P[0], 4398046486529ULL);
+}
+
+TEST(EvisV1PrimeArrayCompat, IP3BaseDebPrimes) {
+    using evi::detail::IP3Base;
+    // IP3: deb_primes = [Q[0]=30b, Q[1]=30b, P[0]=23b, P[1]=23b]
+    // p_bits header = bitLen(PRIMES_Q[1]) (chain[1]), NOT PRIMES_P[0].
+    // Aux split into two 23-bit primes for u32 storage; logQPR = 30+30+23+23 = 106.
+    static_assert(IP3Base::PRIMES_Q.size() == 2, "IP3 chain has 2 primes");
+    static_assert(IP3Base::PRIMES_P.size() == 2, "IP3 aux has 2 primes");
+    EXPECT_EQ(IP3Base::PRIMES_Q[0], 1073692673ULL);
+    EXPECT_EQ(IP3Base::PRIMES_Q[1], 1073668097ULL);
+    EXPECT_EQ(IP3Base::PRIMES_P[0], 8380417ULL);
+    EXPECT_EQ(IP3Base::PRIMES_P[1], 8273921ULL);
+}
+
+TEST(EvisV1PrimeArrayCompat, QFBaseDebPrimes) {
+    using evi::detail::QFBase;
+    // QF: deb_primes = [Q=58b, P=51b]; single-Q preset, so p_bits = PRIMES_P[0].
+    static_assert(QFBase::PRIMES_Q.size() == 1, "QF has single chain prime");
+    static_assert(QFBase::PRIMES_P.size() == 1, "QF has single aux prime");
+    EXPECT_EQ(QFBase::PRIMES_Q[0], 288230376135196673ULL);
+    EXPECT_EQ(QFBase::PRIMES_P[0], 2251799810670593ULL);
+}
+
+// Indexed accessors must return the correct primes for each preset.
+// getQ(0) = first chain prime; getP(0) = first aux prime (0 for IP0 which has NumP=0);
+// deb_prime_at(p,1) = second deb-flat prime (chain[1] for multi-Q, aux[0] for single-Q QF).
+TEST(EvisV1PrimeArrayCompat, IndexedAccessorsRoundTrip) {
+    using evi::detail::deb_prime_at;
+    using evi::detail::IP1Base;
+    using evi::detail::IP2Base;
+    using evi::detail::IP3Base;
+    using evi::detail::IPBase;
+    using evi::detail::QFBase;
+
+    {
+        IPBase ip0;
+        EXPECT_EQ(ip0.getQ(0), IPBase::PRIMES_Q[0]);
+        EXPECT_EQ(ip0.getQ(1), IPBase::PRIMES_Q[1]);
+        EXPECT_EQ(ip0.getP(0), 0u); // IP0 has no aux primes; getP returns 0
+        EXPECT_EQ(ip0.getNumQ(), 2u);
+        EXPECT_EQ(ip0.getNumP(), 0u);
+        // deb-flat[1] for IP0 = PRIMES_Q[1] (multi-Q preset, chain[1])
+        EXPECT_EQ(deb_prime_at(&ip0, 1), IPBase::PRIMES_Q[1]);
+    }
+    {
+        IP1Base ip1;
+        EXPECT_EQ(ip1.getQ(0), IP1Base::PRIMES_Q[0]);
+        EXPECT_EQ(ip1.getQ(1), IP1Base::PRIMES_Q[1]);
+        EXPECT_EQ(ip1.getP(0), IP1Base::PRIMES_P[0]);
+        EXPECT_EQ(ip1.getNumQ(), 2u);
+        EXPECT_EQ(ip1.getNumP(), 1u);
+        // deb-flat[1] for IP1 = PRIMES_Q[1] (chain[1])
+        EXPECT_EQ(deb_prime_at(&ip1, 1), IP1Base::PRIMES_Q[1]);
+    }
+    {
+        IP2Base ip2;
+        EXPECT_EQ(ip2.getQ(0), IP2Base::PRIMES_Q[0]);
+        EXPECT_EQ(ip2.getQ(1), IP2Base::PRIMES_Q[1]);
+        EXPECT_EQ(ip2.getP(0), IP2Base::PRIMES_P[0]);
+        EXPECT_EQ(ip2.getNumQ(), 2u);
+        EXPECT_EQ(ip2.getNumP(), 1u);
+        EXPECT_EQ(deb_prime_at(&ip2, 1), IP2Base::PRIMES_Q[1]);
+    }
+    {
+        IP3Base ip3;
+        EXPECT_EQ(ip3.getQ(0), IP3Base::PRIMES_Q[0]);
+        EXPECT_EQ(ip3.getQ(1), IP3Base::PRIMES_Q[1]);
+        EXPECT_EQ(ip3.getP(0), IP3Base::PRIMES_P[0]);
+        EXPECT_EQ(ip3.getP(1), IP3Base::PRIMES_P[1]);
+        EXPECT_EQ(ip3.getNumQ(), 2u);
+        EXPECT_EQ(ip3.getNumP(), 2u);
+        EXPECT_EQ(deb_prime_at(&ip3, 1), IP3Base::PRIMES_Q[1]);
+    }
+    {
+        QFBase qf;
+        EXPECT_EQ(qf.getQ(0), QFBase::PRIMES_Q[0]);
+        EXPECT_EQ(qf.getP(0), QFBase::PRIMES_P[0]);
+        EXPECT_EQ(qf.getNumQ(), 1u);
+        EXPECT_EQ(qf.getNumP(), 1u);
+        EXPECT_EQ(deb_prime_at(&qf, 1), QFBase::PRIMES_P[0]);
+    }
 }

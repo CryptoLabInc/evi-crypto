@@ -51,7 +51,7 @@ int main() {
 
     u64 poly[DEGREE] = {0};
     poison(poly, sizeof(u64) * DEGREE);
-    sampler.embedding(res, poly, IPBase::PRIME_P);
+    sampler.embedding(res, poly, IPBase::PRIMES_Q[1]);
 
     // HEBase Test
     std::srand(std::time(0));

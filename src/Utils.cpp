@@ -312,6 +312,10 @@ std::string utils::decryptMetadata(const std::string &encrypted, const std::vect
 }
 
 void utils::serializeQueryTo(const Query &query, std::ostream &os) {
+    serializeQueryTo(query, os, evi::BTruncMode::NONE);
+}
+
+void utils::serializeQueryTo(const Query &query, std::ostream &os, evi::BTruncMode mode) {
     serialization::writeHeader(os, serialization::kVersionV1);
     QueryType query_type = QueryType::SINGLE;
     uint8_t query_type_raw = static_cast<uint8_t>(query_type);
@@ -327,8 +331,55 @@ void utils::serializeQueryTo(const Query &query, std::ostream &os) {
     os.write(reinterpret_cast<char *>(&t), 1);
     u32 size = query.size();
     os.write(reinterpret_cast<char *>(&size), sizeof(u32));
+    const bool b_trunc = (mode == evi::BTruncMode::TRUNC);
+    const auto &typed_state = query.getTypedDataState();
+    if (typed_state && typed_state->preset == ParameterPreset::IP3 && t == DataType::CIPHER) {
+        // u32-native (#703): pack each typed Matrix<CIPHER,u32> row straight to
+        // the stream — no u32->u64 widen, no temporary SingleBlock. With
+        // BTruncMode::NONE this is byte-identical to SingleBlock::serializeTo(os)
+        // (V1, full width). When the caller requests TRUNC, emit a V3 row
+        // truncating b to the populated item count `meta.n` (NOT meta.dim) — the
+        // same b_trunc_len the non-typed SingleBlock path below uses
+        // (blk->serializeTo(os, TRUNC, blk->n)). meta.dim is the matrix row dim,
+        // so a dim-truncated V2 row would ship a wrong-length b-part whenever
+        // dim != n. The reader (readCipherBlockRowMeta) auto-detects V1/V2/V3
+        // from the header, so the IP3 V3 stream and a non-typed V3 SingleBlock
+        // stream round-trip identically. The typed path holds polys in
+        // Matrix<u32> with only query[0] as metadata, so it cannot use the
+        // per-block SingleBlock loop below (query[i>0] would be out of range).
+        // Metadata comes from query[0].
+        const auto *typed = asU32Data(typed_state.get());
+        const auto &meta = query[0];
+        const int level = typed->getLevel();
+        const u8 q_bits = typed_state->prime_q_bits;
+        const u8 p_bits = typed_state->prime_p_bits;
+        const BTruncMode row_mode = b_trunc ? BTruncMode::TRUNC : BTruncMode::NONE;
+        if (b_trunc && meta->n > static_cast<u64>(DEGREE)) {
+            throw InvalidInputError("populated count n exceeds DEGREE; cannot truncate b-part");
+        }
+        const std::uint32_t b_trunc_len = static_cast<std::uint32_t>(meta->n);
+        for (u32 i = 0; i < size; ++i) {
+            const std::size_t offset = static_cast<std::size_t>(i) * DEGREE;
+            serializeCipherBlockRow<u32>(
+                os, *meta, typed->getPolyData(1, 0) + offset, typed->getPolyData(0, 0) + offset,
+                level ? typed->getPolyData(1, 1) + offset : nullptr,
+                level ? typed->getPolyData(0, 1) + offset : nullptr, row_mode, q_bits, p_bits, b_trunc_len);
+        }
+        return;
+    }
     for (u32 i = 0; i < size; i++) {
-        query[i]->serializeTo(os);
+        if (b_trunc) {
+            auto blk = std::dynamic_pointer_cast<SingleBlock<DataType::CIPHER>>(query[i]);
+            if (!blk) {
+                throw InvalidInputError("b-part truncation requires CIPHER SingleBlock query");
+            }
+            if (blk->n > static_cast<u64>(DEGREE)) {
+                throw InvalidInputError("populated count n exceeds DEGREE; cannot truncate b-part");
+            }
+            blk->serializeTo(os, evi::BTruncMode::TRUNC, static_cast<std::uint32_t>(blk->n));
+        } else {
+            query[i]->serializeTo(os);
+        }
     }
 }
 
@@ -370,7 +421,7 @@ Query utils::deserializeQueryFrom(std::istream &is) {
 }
 
 void utils::serializeResultTo(const SearchResult &res, std::ostream &os) {
-    serialization::writeHeader(os, serialization::kVersionV1);
+    serialization::writeHeader(os, serialization::kVersionV2);
     uint8_t tag = 0;
     os.write(reinterpret_cast<const char *>(&tag), sizeof(tag));
 
@@ -381,6 +432,11 @@ void utils::serializeResultTo(const SearchResult &res, std::ostream &os) {
     os.write(reinterpret_cast<const char *>(&total_count), sizeof(total_count));
 
     if (res->ip_data != nullptr) {
+        if (res->ip_data->isU32() && res->ip_data->preset != ParameterPreset::IP3) {
+            throw InvalidInputError("u32 search results are only supported for IP3");
+        }
+        const uint8_t coeff_width = res->ip_data->isU32() ? sizeof(u32) : sizeof(u64);
+        os.write(reinterpret_cast<const char *>(&coeff_width), sizeof(coeff_width));
         res->ip_data->serializeTo(os);
     } else {
         throw NotSupportedError("Invalid type for result serialization");
@@ -389,7 +445,8 @@ void utils::serializeResultTo(const SearchResult &res, std::ostream &os) {
 
 SearchResult utils::deserializeResultFrom(std::istream &is) {
     auto header = serialization::readHeader(is);
-    if (header.has_header && header.version != serialization::kVersionV1) {
+    if (header.has_header && header.version != serialization::kVersionV1 &&
+        header.version != serialization::kVersionV2) {
         throw NotSupportedError("Unsupported result serialization version");
     }
 
@@ -403,8 +460,21 @@ SearchResult utils::deserializeResultFrom(std::istream &is) {
 
     if (tag == 0) {
         res = SearchResult(std::make_shared<IPSearchResult>());
-        res->ip_data = std::make_shared<Matrix<DataType::CIPHER>>(0);
+        uint8_t coeff_width = sizeof(u64);
+        if (header.has_header && header.version >= serialization::kVersionV2) {
+            is.read(reinterpret_cast<char *>(&coeff_width), sizeof(coeff_width));
+        }
+        if (coeff_width == sizeof(u32)) {
+            res->ip_data = std::make_shared<Matrix<DataType::CIPHER, u32>>(0);
+        } else if (coeff_width == sizeof(u64)) {
+            res->ip_data = std::make_shared<Matrix<DataType::CIPHER>>(0);
+        } else {
+            throw InvalidInputError("Unsupported result coefficient width");
+        }
         res->ip_data->deserializeFrom(is);
+        if (res->ip_data->isU32() && res->ip_data->preset != ParameterPreset::IP3) {
+            throw InvalidInputError("u32 search results are only supported for IP3");
+        }
         if (!total_count && res->ip_data != nullptr) {
             total_count = static_cast<u32>(res->ip_data->n);
         }
