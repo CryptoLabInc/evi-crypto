@@ -107,5 +107,29 @@
     "NAME": "EVI_IP1_MS4",
     "PARENT": "EVI_IP1",
     "NUM_SECRET": 4
+  },
+  {
+    "_comment": "Novelty-tier (runespace leancore) dim-major kernel preset, copied verbatim from hem/external/deb-param.json so one libdeb.a carries both the EVI_IP* and HEM_2026_03_19 families. GenParam sorts presets by NAME and '_' > uppercase, so this lands last in the Preset enum: no EVI_* enum value shifts and previously serialized evi keys stay valid. Keep it last.",
+    "NAME": "HEM_2026_03_19",
+    "LOG_DEGREE": 12,
+    "NUM_BASE": 1,
+    "NUM_QP": 3,
+    "NUM_TP": 1,
+    "ENC_LEVEL": 3,
+    "GADGET_RANK": 4,
+    "HWT": 2730,
+    "PRIMES": [
+      40961,
+      65537,
+      114689,
+      147457,
+      417793
+    ],
+    "SCALE_FACTORS": [
+      50.0,
+      50.0,
+      50.0,
+      50.0
+    ]
   }
 ]
